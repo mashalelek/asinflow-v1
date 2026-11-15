@@ -284,6 +284,8 @@ export async function editPoHeader(query: QueryLike, poId: string, body: unknown
     const cols = changes.map((c) => c.field);
     await query(`UPDATE purchase_orders SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")}, updated_at = NOW() WHERE id = $1`, [poId, ...cols.map((c) => p.edits[c])]);
     await logEdits(query, poId, userId, "po", poId, changes);
+    // the other numbers (claims commit 8): a number typed on the Edit PO form is kept as "other" until it is labeled on the PO page
+    if (changes.some((c) => c.field === "alt_order_ids")) await (await import("./po-other-numbers")).syncOtherNumbersFromText(query, poId, p.edits.alt_order_ids == null ? null : String(p.edits.alt_order_ids), userId);
   }
   const close = await evaluateAutoClose(poId, query);
   const warning = changes.some((c) => c.field === "order_id") ? ORDER_ID_WARNING : undefined;

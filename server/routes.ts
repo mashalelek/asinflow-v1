@@ -13,11 +13,14 @@ import { loadPoAsinRows, normalizeLineQty, poListOrderBy, REFUND_DUE_SQL, PO_LIN
 import { loadAliases, resolveRetailer, setAlias } from "./supplier-aliases";
 import { linkUnmatchedLine } from "./shipment-link";
 import { likeContains, stripShipmentSuffix } from "./order-number";
-import { clearExtraUnits } from "./extra-units";
 import { writeLineItems, loadActionItemLines } from "./line-action-items";
 import { addClaim, editClaim, linkRefund, unlinkRefund, setOutcome, reopenClaim, dismissClaim, removeClaim, loadClaims, loadOpenClaimSummaries, briefOf, doneTask, cancelLines, snoozeTask, confirmSupplier, addRefundReceived, writeOffRemainder, recordContact, recordReply, clearOutcome, editEvent, removeEvent, mergeClaims } from "./supplier-claims";
 import { loadClaimsPage, bucketCounts, sweepClaimTimers, claimDetail, CLAIM_KIND_FILTERS, refundsDueTotal } from "./claim-buckets";
 import { setReturnFacts, noLabel, uploadReturnLabel } from "./claim-returns";
+import { replacementShort, sweepReplacements } from "./claim-replacements";
+import { pushTracking } from "./tracking-push";
+import { dismissWarning, undoDismissal, listDismissals } from "./po-warning-dismiss";
+import { addOtherNumber, labelOtherNumber, removeOtherNumber, listOtherNumbers } from "./po-other-numbers";
 import { documentRouteDeps } from "./po-documents-routes";
 import { velocityIneligible, ineligibleText } from "./shipment-match";
 import { readVelocityStartDate } from "./ships-to-backfill";
@@ -29,7 +32,7 @@ import { recomputePoCosts } from "./po-costs";
 import { addMoneyRow, editMoneyRow, removeMoneyRow, loadPoMoney, type MoneyEditResult } from "./po-money-edit";
 import { createPoFromForm, lookupAsins } from "./po-create";
 import { recheckForNewPo } from "./new-po-recheck";
-import { parsePoListFilters, poListWhere, poFacetCounts } from "./po-list-filters";
+import { parsePoListFilters, poListWhere, poFacetCounts, searchOtherSql } from "./po-list-filters";
 import { loadPoForm, savePoForm } from "./po-edit-form";
 import { syncVelocityAfterOrderIdRename } from "./po-rename-velocity";
 import { WATCHED_MAILBOXES } from "./claim-emails";
@@ -4114,7 +4117,8 @@ export async function registerRoutes(
                 (p.notes IS NOT NULL
                   OR EXISTS (SELECT 1 FROM po_asins a WHERE a.po_id = p.id AND a.notes IS NOT NULL)
                   OR EXISTS (SELECT 1 FROM po_line_items l WHERE l.po_id = p.id AND l.notes IS NOT NULL)) AS has_notes,
-                ${PO_DOCUMENTS_SQL} AS documents
+                ${PO_DOCUMENTS_SQL} AS documents,
+                ${searchOtherSql(filters.search, { $: (v) => `$${params.push(v)}` })} AS search_other
            FROM purchase_orders p
            ${where}
           ORDER BY ${poListOrderBy(req.query.sort, req.query.dir)}
@@ -4219,6 +4223,9 @@ export async function registerRoutes(
       res.json({
         po: { ...po, invoice_file_name: invoiceFileName, invoice_attached: documents.length > 0 },
         documents,
+        // claims commit 8: the PO's other numbers with their labels (Order card) and its dismissed warnings (Notes card)
+        other_numbers: await listOtherNumbers((sql, params) => query(sql, params), id),
+        dismissals: await listDismissals((sql, params) => query(sql, params), id),
         summary: {
           asin_count: asinRows.length,
           units_ordered: unitsOrdered,
@@ -4383,6 +4390,8 @@ export async function registerRoutes(
     app[method](path, async (req: Request, res: Response) => {
       if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
       await sendGuarded(res, () => withPoTx(async (q) => { const out = await run(q, req); return out; }).then(async (out: any) => {
+        // "It's the reship" (claims commit 8): the tied tracking goes to the ORIGINAL Velocity order, like every row of the PO — after the transaction, fail-soft.
+        if (out?.push_tracking_po_id) { try { await pushTracking({ query: poQuery, poId: String(out.push_tracking_po_id), log: (m: string) => log(m, "tracking") }); } catch (e: any) { log(`reship push failed: ${e?.message ?? e}`, "tracking"); } }
         // An open claim keeps its PO open (D15); closing / dismissing one may let the PO close.
         const po = out?.po_id ?? req.params.id;
         const isPo = /^[0-9a-f-]{36}$/i.test(String(po ?? ""));
@@ -4415,6 +4424,8 @@ export async function registerRoutes(
   claimRoute("post", "/api/pos/claims/:id/write-off-remainder", (q, req) => writeOffRemainder(q, Number(req.params.id), String((req.body ?? {}).reason ?? ""), uid(req)));
   // Returns (claims commit 7, §3.12): the Return card / Steps by hand (return by, Sent / Dropped off, Shipped, Delivered, the tracking #), No label, Upload label.
   claimRoute("post", "/api/pos/claims/:id/return", (q, req) => setReturnFacts(q, Number(req.params.id), req.body ?? {}, uid(req)));
+  // Replacements (claims commit 8): Short — N of M arrived, the rest stays open.
+  claimRoute("post", "/api/pos/claims/:id/replacement-short", (q, req) => replacementShort(q, Number(req.params.id), (req.body ?? {}).arrived_qty, uid(req)));
   claimRoute("post", "/api/pos/claims/:id/no-label", (q, req) => noLabel(q, Number(req.params.id), req.body ?? {}, uid(req)).then((r) => ({ ...r, po_id: undefined })));
   app.post("/api/pos/claims/:id/return-label", (req: Request, res: Response, next) => {
     upload.single("file")(req, res, (err: any) => { if (err) return res.status(err.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ message: err.code === "LIMIT_FILE_SIZE" ? "The file is over 10 MB" : String(err.message ?? err) }); next(); });
@@ -4430,7 +4441,7 @@ export async function registerRoutes(
   app.get("/api/claims", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
     try {
-      const swept = await withPoTx((q) => sweepClaimTimers(q, new Date(), uid(req)));
+      const swept = await withPoTx(async (q) => { await sweepReplacements(q, new Date(), uid(req)); return sweepClaimTimers(q, new Date(), uid(req)); });
       const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
       const rows = await loadClaimsPage(poQuery, { supplier: str(req.query.supplier), kind: str(req.query.kind), po: str(req.query.po) });
       const all = await loadClaimsPage(poQuery);
@@ -4703,13 +4714,32 @@ export async function registerRoutes(
     } catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err.message }); }
   });
 
-  // "Extra units shipped" cleared by hand — a note is required (Maria 2026-10-29).
-  app.post("/api/pos/asin-rows/:id/extra-units/clear", async (req: Request, res: Response) => {
+  // Dismiss a warning with a note (claims commit 8, §3.13 rows 10–13): Extra units shipped / Pack size mismatch / FBA receiving
+  // mismatch on an ASIN row, Review Velocity on the PO; undo brings it back. The pre-114 "clear…" is this.
+  app.post("/api/pos/asin-rows/:id/warnings/dismiss", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    try {
-      const out = await withPoTx((q) => clearExtraUnits(q, String(req.params.id ?? ""), (req.body ?? {}).note, uid(req)));
-      res.status(out.status).json(out.body);
-    } catch (err: any) { res.status(err instanceof EditError ? err.status : 500).json({ message: err.message }); }
+    await sendGuarded(res, () => withPoTx((q) => dismissWarning(q, { poAsinId: String(req.params.id ?? "") }, String((req.body ?? {}).warning ?? ""), (req.body ?? {}).note, uid(req))));
+  });
+  app.post("/api/pos/:id/warnings/dismiss", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => dismissWarning(q, { poId: String(req.params.id ?? "") }, String((req.body ?? {}).warning ?? ""), (req.body ?? {}).note, uid(req))));
+  });
+  app.post("/api/pos/warning-dismissals/:id/undo", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => undoDismissal(q, Number(req.params.id), uid(req))));
+  });
+  // The other numbers of a PO (claims commit 8): add with a label, relabel, remove. The PO's own order # never changes here.
+  app.post("/api/pos/:id/other-numbers", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => addOtherNumber(q, String(req.params.id ?? ""), req.body ?? {}, uid(req))));
+  });
+  app.patch("/api/pos/other-numbers/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => labelOtherNumber(q, Number(req.params.id), req.body ?? {}, uid(req))));
+  });
+  app.delete("/api/pos/other-numbers/:id", async (req: Request, res: Response) => {
+    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
+    await sendGuarded(res, () => withPoTx((q) => removeOtherNumber(q, Number(req.params.id), uid(req))));
   });
 
   // PO-level set (PO table v2 §4): the desired union applies to EVERY product

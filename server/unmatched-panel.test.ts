@@ -81,7 +81,7 @@ describe("Extra units shipped and the dismiss note (Maria 2026-10-29)", () => {
     expect(rows).toMatch(/if \(item === EXTRA_UNITS_SHIPPED\) return "bg-red-500\/15 text-red-600/);
     expect(rows).toMatch(/titles=\{extraTitles\(a\)\}/);
     expect(rows).toMatch(/disabled=\{!note\.trim\(\)\} onClick=\{\(\) => void save\(\)\}/);
-    expect(routes).toMatch(/app\.post\("\/api\/pos\/asin-rows\/:id\/extra-units\/clear"/);
+    expect(routes).toMatch(/app\.post\("\/api\/pos\/asin-rows\/:id\/warnings\/dismiss"/);
     expect(readFileSync(join(__dirname, "po-list-filters.ts"), "utf8")).toMatch(/if \(item === EXTRA_UNITS_SHIPPED\) any\.push\(EXTRA_UNITS_EXISTS_SQL\)/); // the list filter, moved 2026-11-06
   });
 });

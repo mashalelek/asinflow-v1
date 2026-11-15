@@ -33,6 +33,12 @@ export interface ClaimRow {
   return_by: string | null; return_by_source: string | null;
   return_shipped_at: string | null; return_shipped_source: string | null; return_delivered_at: string | null; return_delivered_source: string | null;
   return_tracking: { id: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location: string | null; delivered_at: string | null; velocity_tracking_status: string | null } | null;
+  /** The replacement (claims commit 8, §3.13, migration 114): delivered, Shipped's source, the reship's own order #, a short arrival, the line at Velocity, the tied inbound tracking row. */
+  replacement_delivered_at: string | null; replacement_shipped_source: string | null; replacement_order_id: string | null; replacement_short_qty: number | null;
+  line_received_individual: number | null; line_ordered_individual: number | null;
+  replacement_tracking: { id: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location: string | null; delivered_at: string | null; retailer_order_id: string | null; pushed_velocity_ids: string[] | null } | null;
+  /** The PO's other numbers (po_other_numbers): the search hint and the Replacement card. */
+  other_numbers: Array<{ id: number; number: string; kind: string; note: string | null; claim_id: number | null }>;
   /** The PO (for the Claims page rows): supplier, order #, date, destination, whether closed, the alternate order #s. */
   supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
   asin: string | null; product_name: string | null; supplier_sku: string | null; line_no: number;
@@ -69,6 +75,13 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
             c.supplier_confirmed_at::text AS supplier_confirmed_at, c.last_supplier_reply_at::text AS last_supplier_reply_at,
             c.replacement_shipped_at::text AS replacement_shipped_at, c.replacement_arrived_at::text AS replacement_arrived_at,
             c.return_by::text AS return_by, c.return_shipped_at::text AS return_shipped_at, c.return_delivered_at::text AS return_delivered_at,
+            c.replacement_delivered_at::text AS replacement_delivered_at,
+            le.received_individual AS line_received_individual, le.ordered_individual AS line_ordered_individual,
+            (SELECT json_build_object('id', t.id, 'carrier', t.carrier, 'tracking_number', t.tracking_number, 'carrier_status', t.carrier_status,
+                                      'est_delivery_at', to_char(t.est_delivery_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'last_scan_at', to_char(t.last_scan_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                                      'last_scan_location', t.last_scan_location, 'delivered_at', to_char(t.delivered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 'retailer_order_id', t.retailer_order_id, 'pushed_velocity_ids', t.pushed_velocity_ids)
+               FROM po_tracking t WHERE t.claim_id = c.id AND t.direction = 'inbound' ORDER BY t.id DESC LIMIT 1) AS replacement_tracking,
+            COALESCE((SELECT json_agg(json_build_object('id', n.id, 'number', n.number, 'kind', n.kind, 'note', n.note, 'claim_id', n.claim_id) ORDER BY n.id) FROM po_other_numbers n WHERE n.po_id = c.po_id), '[]') AS other_numbers,
             (SELECT d.id FROM po_documents d WHERE d.claim_id = c.id AND d.type = 'return_label' ORDER BY d.id LIMIT 1) AS return_label_doc_id,
             (SELECT d.document_at::text FROM po_documents d WHERE d.claim_id = c.id AND d.type = 'return_label' ORDER BY d.id LIMIT 1) AS return_label_at,
             (SELECT d.source FROM po_documents d WHERE d.claim_id = c.id AND d.type = 'return_label' ORDER BY d.id LIMIT 1) AS return_label_source,
@@ -99,6 +112,9 @@ export async function loadClaims(query: QueryLike, where: { poId?: string; ids?:
       product_pack: num(r.product_pack), asin_pack: num(r.asin_pack), ordered: num(r.ordered), line_no: Number(r.line_no), refunds, tasks: (r.tasks ?? []).map((t: any) => ({ ...t, id: Number(t.id) })),
       return_label_doc_id: r.return_label_doc_id == null ? null : Number(r.return_label_doc_id), return_label_at: r.return_label_at ?? null, return_label_source: r.return_label_source ?? null, return_no_label: r.return_no_label === true,
       return_tracking: r.return_tracking ? { ...r.return_tracking, id: Number(r.return_tracking.id) } : null,
+      replacement_tracking: r.replacement_tracking ? { ...r.replacement_tracking, id: Number(r.replacement_tracking.id) } : null,
+      replacement_short_qty: num(r.replacement_short_qty), line_received_individual: num(r.line_received_individual), line_ordered_individual: num(r.line_ordered_individual),
+      other_numbers: (r.other_numbers ?? []).map((n: any) => ({ ...n, id: Number(n.id), claim_id: n.claim_id == null ? null : Number(n.claim_id) })),
       owed: m.owed, remaining: m.remaining, received: m.received };
   });
 }
@@ -176,7 +192,7 @@ export async function addTask(query: QueryLike, claimId: number, kind: ClaimTask
   await query(`INSERT INTO supplier_claim_tasks (claim_id, kind, "group", reason, qty) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (claim_id, kind) WHERE done_at IS NULL DO NOTHING`, [claimId, kind, CLAIM_TASK_GROUP[kind], reason, qty]);
 }
 /** What a tick carries (§3.3 "Ticking it"): the report's date / channel / note, the reship order #, a suggestion's decision. */
-export interface DoneTaskBody { date?: string | null; channel?: string | null; note?: string | null; alt_order_id?: string | null; /** review_suggestion: open / dismiss; review_email_match: attach / not_this; closed_claim_email: reopen / nothing (commit 6). */ decision?: "open" | "dismiss" | "attach" | "not_this" | "reopen" | "nothing" | null; reason?: string | null }
+export interface DoneTaskBody { date?: string | null; channel?: string | null; note?: string | null; alt_order_id?: string | null; /** review_suggestion: open / dismiss; review_email_match: attach / not_this; closed_claim_email: reopen / nothing (commit 6); confirm_reship_order: reship / not_reship, confirm_arrival: arrived / short (commit 8). */ decision?: "open" | "dismiss" | "attach" | "not_this" | "reopen" | "nothing" | "reship" | "not_reship" | "arrived" | "short" | null; reason?: string | null; /** confirm_arrival short: how many arrived (Individual units). */ qty?: number | string | null }
 
 /**
  * Tick a task. contact_supplier / follow_up_supplier record the report (date, channel, note → reported_at / reported_channel,
@@ -221,6 +237,7 @@ export async function doneTask(query: QueryLike, taskId: number, userId: number 
   }
   await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE id = $1 AND done_at IS NULL`, [taskId, userId]);
   const changes: Array<{ field: string; old: string | null; new: string | null }> = [{ field: `task ${kind}`, old: "open", new: "done" }];
+  let pushPo: string | null = null;
   if (kind === "contact_supplier" || kind === "follow_up_supplier") {
     const date = body.date && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : new Date().toISOString().slice(0, 10);
     const channel = String(body.channel ?? "").trim() || null;
@@ -231,28 +248,29 @@ export async function doneTask(query: QueryLike, taskId: number, userId: number 
     const note = String(body.note ?? "").trim() || null;
     await event(query, claimId, kind === "contact_supplier" ? "reported" : "followed_up", [channel, date, note].filter(Boolean).join(" · ") || null, userId);
   } else if (kind === "confirm_reship_order") {
-    const alt = String(body.alt_order_id ?? "").trim();
-    if (!alt) throw new EditError(400, "the reship order # is required");
-    const po = (await query(`SELECT alt_order_ids FROM purchase_orders WHERE id = $1`, [poId])).rows[0];
-    const have = String(po?.alt_order_ids ?? "").split(/[\s,;/]+/).filter(Boolean);
-    if (!have.includes(alt)) {
-      const next = [...have, alt].join(", ");
-      await query(`UPDATE purchase_orders SET alt_order_ids = $2, updated_at = now() WHERE id = $1`, [poId, next]);
-      await logEdits(query, poId, userId, "po", poId, [{ field: "alt_order_ids", old: po?.alt_order_ids ?? null, new: next }]);
-    }
-    await event(query, claimId, "reship_confirmed", alt, userId);
+    // §3.13 row 4: It's the reship (the number joins the PO as a labeled replacement order, the tracking row is tied and pushed to the ORIGINAL
+    // Velocity order by the route) / It's not (never proposed for this claim again); a typed order # with no row works as before
+    const { confirmReship, dismissReship } = await import("./claim-replacements");
+    const payload = (t.payload ?? null) as { tracking_id?: number | null; order_id?: string | null } | null;
+    if (body.decision === "not_reship") { await dismissReship(query, claimId, payload, userId); }
+    else { const r = await confirmReship(query, claimId, payload, body.alt_order_id ? String(body.alt_order_id) : null, userId); if (r.tracking) pushPo = poId; }
+  } else if (kind === "confirm_arrival") {
+    // row 6: Arrived closes; Short keeps the claim open for the rest (replacementShort, body.qty = how many arrived)
+    if (body.decision === "short") { const { replacementShort } = await import("./claim-replacements"); await replacementShort(query, claimId, body.qty, userId); return { id: Number(t.id), claim_id: claimId, po_id: poId }; }
+    await setOutcome(query, claimId, { outcome: "replacement", arrived: true }, userId);
+    return { id: Number(t.id), claim_id: claimId, po_id: poId };
   } else if (kind === "check_on_it") {
     await event(query, claimId, "checked", body.note?.trim() || "checked — timer restarted", userId);
-  } else if (kind === "send_label" || kind === "drop_off_return") {
-    // §3.12: the tick carries its date (Steps: "click any to set or change"); the return then waits for the carrier's first scan
+  } else if (kind === "send_label" || kind === "drop_off_return" || kind === "tell_velocity_replacement") {
+    // §3.12 / §3.13: the tick carries its date (Steps: "click any to set or change"); the return / replacement then waits for the carrier
     const date = body.date && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : null;
     if (date) await query(`UPDATE supplier_claim_tasks SET done_at = $2::timestamptz WHERE id = $1`, [taskId, `${date}T12:00:00Z`]);
-    await event(query, claimId, "task_done", `${kind}: ${kind === "send_label" ? "sent to Velocity" : "dropped off"}${date ? ` ${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}` : ""}${body.channel ? ` · ${body.channel}` : ""}${body.note?.trim() ? ` · ${body.note.trim()}` : ""}`, userId);
+    await event(query, claimId, "task_done", `${kind}: ${kind === "send_label" ? "sent to Velocity" : kind === "drop_off_return" ? "dropped off" : "told Velocity"}${date ? ` ${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}` : ""}${body.channel ? ` · ${body.channel}` : ""}${body.note?.trim() ? ` · ${body.note.trim()}` : ""}`, userId);
   } else {
     await event(query, claimId, "task_done", `${kind}${body.note?.trim() ? `: ${body.note.trim()}` : ""}`, userId);
   }
   await logEdits(query, poId, userId, "claim", String(claimId), changes);
-  return { id: Number(t.id), claim_id: claimId, po_id: poId };
+  return { id: Number(t.id), claim_id: claimId, po_id: poId, ...(pushPo ? { push_tracking_po_id: pushPo } : {}) };
 }
 
 /**
@@ -363,7 +381,8 @@ export async function clearOutcome(query: QueryLike, id: number, reason: string 
   if (d.status === "closed" && d.outcome === "write_off") throw new EditError(400, "a written-off claim is closed — Reopen it first");
   await query(`UPDATE supplier_claims SET outcome = NULL, outcome_amount = NULL, outcome_detail = NULL, replacement_qty = NULL, replacement_shipped_at = NULL, replacement_arrived_at = NULL, supplier_confirmed_at = NULL,
                  status = CASE WHEN status = 'closed' THEN 'open' ELSE status END, closed_at = CASE WHEN status = 'closed' THEN NULL ELSE closed_at END, updated_at = now() WHERE id = $1`, [id]);
-  await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('refund_received', 'replacement_arrived')`, [id]);
+  await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('refund_received', 'replacement_arrived', 'tell_velocity_replacement', 'confirm_arrival', 'confirm_reship_order')`, [id]);
+  await query(`UPDATE supplier_claims SET replacement_delivered_at = NULL, replacement_shipped_source = NULL, replacement_order_id = NULL, replacement_short_qty = NULL WHERE id = $1`, [id]);
   await event(query, id, "outcome_set", `outcome cleared — was ${d.outcome}${reason ? ` · ${reason}` : ""}`, userId);
   await logEdits(query, String(d.po_id), userId, "claim", String(id), [{ field: "claim outcome", old: String(d.outcome), new: reason ? `cleared: ${reason}` : null }]);
   return { id, po_id: String(d.po_id) };
@@ -499,7 +518,7 @@ export async function removeEvent(query: QueryLike, eventId: number, userId: num
     const outcome = prev && (CLAIM_OUTCOMES as readonly string[]).includes(prev) && prev !== "write_off" ? prev : null;
     await query(`UPDATE supplier_claims SET outcome = $2, outcome_amount = NULL, outcome_detail = NULL, replacement_qty = NULL, replacement_shipped_at = NULL, replacement_arrived_at = NULL, write_off_reason = NULL,
                    status = CASE WHEN status = 'closed' THEN 'open' ELSE status END, closed_at = CASE WHEN status = 'closed' THEN NULL ELSE closed_at END, updated_at = now() WHERE id = $1`, [claimId, outcome]);
-    await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('refund_received', 'replacement_arrived')`, [claimId]);
+    await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('refund_received', 'replacement_arrived', 'tell_velocity_replacement', 'confirm_arrival', 'confirm_reship_order')`, [claimId]);
     await query(`DELETE FROM supplier_claim_events WHERE claim_id = $1 AND type = 'closed' AND at >= $2::timestamptz`, [claimId, at]);
     if (outcome === "replacement") await addTask(query, claimId, "replacement_arrived", "tick when the replacement units arrive");
     changes.push({ field: "claim outcome", old: d.outcome, new: outcome });
@@ -836,7 +855,11 @@ export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody
     await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `replacement${arrived ? " (arrived)" : ""}` }]);
     await event(query, id, "outcome_set", "replacement", userId);
     if (arrived) { await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL`, [id, userId]); await event(query, id, "replacement_arrived", null, userId); await event(query, id, "closed", "replacement arrived", userId); }
-    else await addTask(query, id, "replacement_arrived", "tick when the replacement units arrive");
+    else {
+      await addTask(query, id, "replacement_arrived", "tick when the replacement units arrive");
+      // §3.13 row 1: a Velocity PO — tell Velocity more units are coming on the original order (Discord; AF sends nothing)
+      if (d.outcome !== "replacement" && (await query(`SELECT ships_to FROM purchase_orders WHERE id = $1`, [poId])).rows[0]?.ships_to !== "home") await addTask(query, id, "tell_velocity_replacement", "tell Velocity more units are coming on the original order");
+    }
     return { id, po_id: poId };
   }
   const b = body as Extract<OutcomeBody, { outcome: "refund_card" | "gift_card" | "store_credit" }>;
@@ -844,6 +867,8 @@ export async function setOutcome(query: QueryLike, id: number, body: OutcomeBody
   await query(`UPDATE supplier_claims SET outcome = $2, outcome_amount = COALESCE($3, outcome_amount), outcome_detail = COALESCE($4, outcome_detail), status = CASE WHEN status = 'suggested' THEN 'open' ELSE status END, updated_at = now() WHERE id = $1`,
     [id, outcome, amt, b.detail == null ? null : String(b.detail).trim() || null]);
   await query(`UPDATE supplier_claim_tasks SET done_at = now(), done_by = $2 WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('confirm_outcome', 'read_reply')`, [id, userId]);
+  // §3.13 row 8: a replacement that never comes becomes a refund / credit — its steps, card and tasks go, the units leave Expected now
+  if (d.outcome === "replacement") await query(`DELETE FROM supplier_claim_tasks WHERE claim_id = $1 AND done_at IS NULL AND kind IN ('replacement_arrived', 'tell_velocity_replacement', 'confirm_arrival', 'confirm_reship_order')`, [id]);
   await logEdits(query, poId, userId, "claim", String(id), [{ field: "claim outcome", old: d.outcome, new: `${outcome}${amt != null ? ` ${money(amt)}` : ""}` }]);
   await event(query, id, "outcome_set", outcome, userId);
   await syncRefundCoverage(query, [id], userId);

@@ -11,7 +11,7 @@ const NOW = new Date("2026-11-05T15:00:00Z");   // Thu Nov 5, 10:00 ET — timer
 const LATER = new Date("2026-11-12T15:00:00Z"); // Thu Nov 12 — the Nov 3 / Nov 4 timers have run out
 const base = (over: Partial<UiClaim> = {}): UiClaim => ({
   status: "open", kind: "missing", outcome: null, found_at: "2026-11-02", found_by: "maria", reported_at: null, reported_channel: null, supplier_confirmed_at: null, last_supplier_reply_at: null, closed_at: null,
-  return_required: false, replacement_shipped_at: null, replacement_arrived_at: null, qty_disposed: null, remaining: 5.97, received: 0, qty: 1, ordered: 12, tasks: [], ships_to: "velocity", ...over,
+  return_required: false, replacement_shipped_at: null, replacement_arrived_at: null, qty_disposed: null, remaining: 5.97, received: 0, qty: 1, ordered: 12, tasks: [], ships_to: "velocity", order_id: "ZZ-PATH", ...over,
 });
 let n = 0;
 const open = (kind: string, created = "2026-11-02T15:00:00Z", reason: string | null = null) => ({ id: ++n, kind, done_at: null, created_at: created, reason });
@@ -72,9 +72,10 @@ describe("§3.4 paths, creation → Closed", () => {
     const closed = base({ ...shipped, status: "closed", closed_at: "2026-11-10T12:00:00Z", replacement_arrived_at: "2026-11-10", tasks: [...told.tasks, done("replacement_arrived", "2026-11-10T12:00:00Z")] });
     walk("missing → replacement", [
       { stage: "reported 11/3", c: reported, want: { current: "answered", bucket: "waiting_supplier", next: "waiting for the supplier's answer", due: "2026-11-10T12:00:00.000Z" } },
-      { stage: "replacement promised 11/4 · tell Velocity", c: promised, want: { current: "tell_velocity", bucket: "needs_attention", next: "Tell Velocity a replacement is coming", due: null, action: "Told Velocity" } },
-      { stage: "told Velocity 11/4", c: told, want: { current: "shipped", bucket: "waiting_shipment", next: "waiting for the carrier", since: "2026-11-04T17:00:00.000Z", due: "2026-11-11T17:00:00.000Z" } },
-      { stage: "shipped 11/6", c: shipped, now: LATER, want: { current: "arrived", bucket: "waiting_shipment", next: "Replacement arrived", since: "2026-11-06T12:00:00.000Z", due: "2026-11-13T12:00:00.000Z", timedOut: false, sentence: "Replacement shipped 11/6 · not arrived", action: "Arrived" } },
+      // §3.13 row 1: the Velocity message; row 2 / 7: Waiting on supplier until a shipping email or tracking (told Velocity restarts the timer); row 3: shipped
+      { stage: "replacement promised 11/4 · tell Velocity", c: promised, want: { current: "tell_velocity", bucket: "needs_attention", next: "Tell Velocity a replacement is coming", due: null, sentence: "Replacement promised 11/4 · tell Velocity 1 more are coming on order ZZ-PATH", action: "Told Velocity" } },
+      { stage: "told Velocity 11/4", c: told, want: { current: "shipped", bucket: "waiting_supplier", next: "waiting for the shipping email or tracking", since: "2026-11-04T17:00:00.000Z", due: "2026-11-11T17:00:00.000Z", timeout: "check_on_it" } },
+      { stage: "shipped 11/6", c: shipped, now: LATER, want: { current: "arrived", bucket: "waiting_shipment", next: "Replacement arrived", since: "2026-11-06T12:00:00.000Z", due: "2026-11-13T12:00:00.000Z", timedOut: false, sentence: "Replacement shipped 11/6", action: "Arrived" } },
       { stage: "arrived 11/10", c: closed, now: LATER, want: { current: null, bucket: "closed", next: "" } },
     ]);
   });

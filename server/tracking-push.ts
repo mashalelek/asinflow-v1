@@ -22,7 +22,6 @@
 // Order links (migration 099, 2026-11-07): a Velocity order linked to one of
 // the PO's ASIN rows is a target too (same inbound / unit-status rule), and
 // counts as "the PO is in Velocity" whatever its order # says.
-import { pairFor, logReplacementTracking, replacementLogged, replacementCheckedIn } from "./tracking-replacement-pair";
 import { fetchAllInboundOrders, fetchAllKnownOrders, appendTrackingBulk, type VelocityInboundOrder } from "./velocity-api";
 import { routeTracking, joinReasons, type ShipsTo } from "./tracking-route-rules";
 import { isPlaceholder } from "./tracking-ingest";
@@ -146,8 +145,6 @@ export function buildTrackingPutBody(current: VelocityInboundOrder, additions: A
 
 export interface PoPushPlan {
   po_id: string; order_id: string;
-  // The one-off replacement pair (tracking-replacement-pair.ts): the other PO's Velocity order(s) these numbers also go to.
-  also?: Array<{ to_order_id: string; velocity_order_id: string | null; already: string[]; to_add: string[]; error?: string; resolved?: string }>;
   rows: Array<{ id: number; tracking_number: string; decision: "push" | "held" | "review" | "received_by_velocity"; reasons: string[] }>;
   targets: Array<{ velocity_order_id: string; asin: string; already: string[]; to_add: string[] }>;
 }
@@ -257,35 +254,7 @@ export async function pushTracking(opts: { query: QueryLike; deps?: VelocityDeps
         for (const a of missing) errors.set(a.id, errors.has(a.id) ? `${errors.get(a.id)}; ${msg}` : msg);
       }
     }
-    // One-off replacement pair (Maria 2026-11-05): the same numbers also go to the other PO's Velocity order, then a
-    // History row on both POs (which resolves the from-PO's derived item). Fail-soft: an error is in the plan and the
-    // log, the item stays open, and the next pass tries again.
-    const pair = pairFor(orderId);
-    if (pair && toPush.length > 0) {
-      plan.also = [];
-      const numbers = additions.map((a) => a.tracking_number);
-      // Fully checked in at Velocity: the replacement arrived, nothing to add (the item has resolved; 2026-11-05).
-      const checkedIn = await replacementCheckedIn(opts.query, pair);
-      const others = checkedIn ? [] : inbound.get(pair.toOrderId) ?? [];
-      if (checkedIn) plan.also.push({ to_order_id: pair.toOrderId, velocity_order_id: null, already: [], to_add: [], resolved: "fully checked in at Velocity" });
-      else if (others.length === 0) plan.also.push({ to_order_id: pair.toOrderId, velocity_order_id: null, already: [], to_add: numbers, error: "not an inbound Velocity order" });
-      for (const t of others) {
-        const have = new Set(trackingNumbersOf(t));
-        const add = numbers.filter((n) => !have.has(n)), already = numbers.filter((n) => have.has(n));
-        const entry: NonNullable<PoPushPlan["also"]>[number] = { to_order_id: pair.toOrderId, velocity_order_id: t.order_id, already, to_add: add };
-        plan.also.push(entry);
-        if (opts.dryRun) continue;
-        try {
-          if (add.length) { await deps.append([t.order_id], add); res.puts++; }
-          // History once per addition: when numbers were added, or the first time they are found already there.
-          if (add.length || !(await replacementLogged(opts.query, pair, poId))) await logReplacementTracking(opts.query, pair, poId, add.length ? add : numbers, t.order_id);
-        } catch (err: any) {
-          res.put_errors++;
-          entry.error = String(err?.message ?? err);
-          opts.log?.(`push: replacement pair ${orderId} → ${pair.toOrderId} (${t.order_id}) failed: ${entry.error}`);
-        }
-      }
-    }
+    // (A replacement's tracking — same order # or the reship's own — is pushed to the ORIGINAL Velocity order like any row of the PO: claims commit 8, §3.13; the 2026-11-05 one-off pair is gone.)
     for (const row of toPush) {
       const pr = plan.rows.find((x) => x.id === row.id)!;
       const reasons = [...pr.reasons];

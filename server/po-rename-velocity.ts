@@ -15,6 +15,7 @@
 import { fetchAllKnownOrders, updateInboundOrder, type KnownVelocityOrder } from "./velocity-api";
 import { linkVelocityOrder } from "./velocity-order-links";
 import { logEdits } from "./po-edit";
+import { addOtherNumber } from "./po-other-numbers";
 import { log as defaultLog } from "./log";
 import type { QueryLike } from "./scheduler/types";
 
@@ -141,16 +142,16 @@ export async function syncVelocityAfterOrderIdRename(
       parts.push(`Velocity order ${velocityLabel(o)} not linked: ${r.body.message}`);
     }
   }
-  // The old number stays matchable (emails, documents, Sync Shipments) as an alternate — unless it is a placeholder.
+  // The old number stays matchable (emails, documents, Sync Shipments) as the PO's previous number, dated (claims commit 8: every
+  // other number on a PO carries its label) — unless it is a placeholder.
   if (/\d/.test(oldId)) {
     const cur = (await query(`SELECT alt_order_ids FROM purchase_orders WHERE id = $1`, [po.poId])).rows[0];
     const have = String(cur?.alt_order_ids ?? "").split(/[\s,;/]+/).filter(Boolean);
     if (!have.includes(oldId)) {
-      const next = [...have, oldId].join(", ");
-      await query(`UPDATE purchase_orders SET alt_order_ids = $2, updated_at = NOW() WHERE id = $1`, [po.poId, next]);
-      await logEdits(query, po.poId, userId, "po", po.poId, [{ field: "alt_order_ids", old: have.join(", ") || null, new: next }]);
+      const d = new Date(); const md = `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()}`;
+      await addOtherNumber(query, po.poId, { number: oldId, kind: "previous_number", note: `renamed ${md}` }, userId);
       result.altKept = true;
-      parts.push(`${oldId} kept as an alternate order #`);
+      parts.push(`${oldId} kept as the previous number`);
     }
   }
   result.warning = parts.join(" · ");

@@ -7,7 +7,7 @@
 //   stepActions     — the Steps list per path, every step with the handler that sets or changes it.
 //   whatHappensNext — the detail's "What happens next" box: now · then · then.
 import { CLAIM_KIND_LABELS, CLAIM_OUTCOME_LABELS, CLAIM_TASK_LABELS, type ClaimTaskKind } from "./supplier-claim";
-import { BUSINESS_DAYS, claimSteps, isReported, effectiveTasks, supplierConfirmedAt, TIMEOUT_REASON_RE, PASSIVE_TASK_KINDS, isActiveTask, returnLabelAt, returnSentAt, returnPending, type BucketClaim, type BucketResult, type ClaimStep } from "./claim-bucket";
+import { BUSINESS_DAYS, claimSteps, isReported, effectiveTasks, supplierConfirmedAt, TIMEOUT_REASON_RE, PASSIVE_TASK_KINDS, isActiveTask, returnLabelAt, returnSentAt, returnPending, replacementPromisedAt, VELOCITY_SHORT_DAYS, type BucketClaim, type BucketResult, type ClaimStep } from "./claim-bucket";
 import { carrierStatusText } from "./carrier-status";
 
 export interface UiTask { id: number; kind: ClaimTaskKind | string; reason?: string | null; done_at: string | null; created_at?: string; snoozed_until?: string | null; /** An email-made task (commit 6): the email behind it. */ gmail_message_id?: string | null; mailbox?: string | null; payload?: Record<string, unknown> | null }
@@ -22,6 +22,7 @@ export interface UiClaim extends BucketClaim {
   /** The line's Ordered (Individual units) for "2 of 24"; null for a whole-PO claim or a legacy line. */
   ordered?: number | null;
   refunds?: ReadonlyArray<{ id: number; amount: number | null; amount_applied: number | null }>;
+  replacement_qty?: number | null;
   tasks: ReadonlyArray<UiTask>;
   write_off_reason?: string | null;
   source_items_json?: unknown;
@@ -50,6 +51,26 @@ const carrierPhrase = (c: UiClaim): string => {
 const returnByPhrase = (c: UiClaim, home: boolean) => (c.return_by ? ` · ${home ? "drop off" : "return"} by ${fmtMD(c.return_by)}` : "");
 /** The label phrase: "Return label saved 10/31 · from email" / "No label" / "Return label uploaded 11/2". */
 const labelPhrase = (c: UiClaim) => (c.return_no_label ? "No label" : `Return label ${c.return_label_source === "upload" ? "uploaded" : "saved"} ${fmtMD(returnLabelAt(c))}${suffix(c.return_label_source)}`);
+/** The carrier phrase of the replacement's tracking row ("UPS in transit · due 11/15"). */
+const replacementCarrierPhrase = (c: UiClaim): string => {
+  const t = c.replacement_tracking; if (!t) return "";
+  const w = carrierStatusText(t);
+  const status = w ? (w.source === "velocity" ? w.text : w.text.toLowerCase()) : null;
+  return `${status ? ` · ${carrierWord(t.carrier)} ${status}` : ""}${t.est_delivery_at && !t.delivered_at ? ` · due ${fmtMD(t.est_delivery_at)}` : ""}`;
+};
+/**
+ * Copy message for Velocity on a replacement (§3.13, place 5): "A replacement for N units of <product> (<ASIN>) from order
+ * <original #> is on its way, <carrier> <tracking #>. The box may show order # <replacement #>. Please receive it on order
+ * <original #>." — the middle sentence only when the reship has its own number; before any tracking "is coming".
+ */
+export function replacementMessage(c: UiClaim): string {
+  const n = c.replacement_qty ?? c.qty;
+  const product = c.product_name ?? "the product";
+  const t = c.replacement_tracking;
+  const head = `A replacement for ${n == null ? "the" : n} units of ${product}${c.asin ? ` (${c.asin})` : ""} from order ${c.order_id ?? "?"} is ${t?.tracking_number ? `on its way, ${carrierWord(t.carrier)} ${t.tracking_number}` : "coming"}.`;
+  const box = c.replacement_order_id && c.replacement_order_id !== c.order_id ? ` The box may show order # ${c.replacement_order_id}.` : "";
+  return `${head}${box} Please receive it on order ${c.order_id ?? "?"}.`;
+}
 /**
  * Copy message for Velocity (§3.12): plain text for the clipboard — AF sends nothing (D13: Discord stays manual).
  * "Please ship back N units of <product> (<ASIN>) from order <order #> using the attached label. It has to go out by <return-by date>."
@@ -80,6 +101,8 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
   // the Dismissed tab's Step: why (the typed reason, else the claim's note) — Maria 2026-11-12
   if (c.status === "dismissed") return `Dismissed${c.dismiss_reason ? ` · ${c.dismiss_reason}` : c.note ? ` · ${c.note}` : ""}`;
   // a written-off claim with Velocity still to act reads its task / its wait, not "Closed" (its bucket says so)
+  // §3.13 row 5: "Replacement arrived 11/15 · Velocity received 12 of 12"
+  if (c.status === "closed" && b.bucket === "closed" && c.outcome === "replacement" && c.replacement_arrived_at) return `Replacement arrived ${fmtMD(c.replacement_arrived_at)}${c.line_received_individual != null && c.line_ordered_individual != null && c.ships_to !== "home" ? ` · Velocity received ${c.line_received_individual} of ${c.line_ordered_individual}` : ""}`;
   if (c.status === "closed" && b.bucket === "closed") return `Closed ${fmtMD(c.closed_at)}${outcomeWord(c) ? ` · ${outcomeWord(c)}` : ""}${c.write_off_reason ? ` · ${c.write_off_reason}` : ""}`;
   const sug = openOf(c, "review_suggestion");
   if (c.status === "suggested" || sug) return sug?.reason ?? "Suggested — open or dismiss";
@@ -93,13 +116,16 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
       // the three email tasks carry their sentence (the mockups' Step text); the row adds "· open email"
       case "read_reply": case "review_email_match": case "closed_claim_email": return first.reason ?? CLAIM_TASK_LABELS[first.kind as ClaimTaskKind];
       case "enter_quantity": return "Quantity not known yet · type the Individual units";
-      case "contact_supplier": return TIMEOUT_REASON_RE.test(first.reason ?? "") ? `${capital(first.reason!.replace(TIMEOUT_REASON_RE, ""))} in ${BUSINESS_DAYS} business days · contact the supplier` : "Report to supplier";
+      case "contact_supplier": return TIMEOUT_REASON_RE.test(first.reason ?? "") ? `${capital(first.reason!.replace(TIMEOUT_REASON_RE, ""))} in ${BUSINESS_DAYS} business days · contact the supplier` : /^replacement short/i.test(first.reason ?? "") ? capital(first.reason!) : "Report to supplier";
       case "follow_up_supplier": return `${reportedText(c)} · no answer in ${BUSINESS_DAYS} business days`;
       case "confirm_reship_order": return first.reason ?? "A reship order # arrived · confirm it";
       // §3.12 rows 1 / 2 / 3 (the list mockup): the label, where it ships from, the return-by date
       case "send_label": return `${labelPhrase(c)} · ${c.return_no_label ? "tell Velocity to ship it back" : "send it to Velocity"}${returnByPhrase(c, false)}`;
       case "drop_off_return": return `${labelPhrase(c)} · ships from home${returnByPhrase(c, true)}`;
-      case "tell_velocity_replacement": return "Replacement promised · tell Velocity it is coming";
+      // §3.13 row 1 (the list mockup): "Replacement promised 11/2 · tell Velocity 11 more are coming on order 65705"
+      case "tell_velocity_replacement": return `Replacement promised ${fmtMD(replacementPromisedAt(c))} · tell Velocity ${c.replacement_qty ?? c.qty ?? "the"} more are coming on order ${c.order_id ?? "?"}`;
+      // row 6 (home PO): the carrier delivered the replacement
+      case "confirm_arrival": return `Replacement delivered ${fmtMD(c.replacement_delivered_at)} · from tracking · did all ${c.replacement_qty ?? c.qty ?? ""} arrive?`;
       case "dispose_units": return `${outcomeWord(c) ?? "Settled"} · ask Velocity to dispose ${c.qty ?? "the"} units`;
       case "update_velocity_order": return first.reason ?? "Update the Velocity order";
       case "upload_return_label": return "A return is needed · no label yet";
@@ -114,7 +140,9 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
       ? `Supplier confirmed ${c.outcome_amount != null ? `$${c.outcome_amount.toFixed(2)} ` : ""}${refundWord(c).toLowerCase()} ${fmtMD(supplierConfirmedAt(c))} · from email · waiting for it to post${short(c)}`
       : `${refundWord(c)} confirmed ${fmtMD(supplierConfirmedAt(c))} · check the ${refundWhere(c)}${short(c)}`;
     // §3.12 rows 4 / 5 (the list mockup): "Return shipped 11/13 · FedEx in transit · due 11/17 · from tracking"; "Dropped off 11/12 · waiting for the first carrier scan"
-    case "waiting_shipment": return c.outcome === "replacement" && c.replacement_shipped_at ? `Replacement shipped ${fmtMD(c.replacement_shipped_at)} · not arrived`
+    // §3.13 rows 3 / 7: "Replacement shipped 11/4 · UPS in transit · due 11/15 · from tracking"; delivered to Velocity, the line short: "Replacement delivered 11/6 · Velocity received 2 of 3"
+    case "waiting_shipment": return c.outcome === "replacement" && c.replacement_delivered_at && c.ships_to !== "home" ? `Replacement delivered ${fmtMD(c.replacement_delivered_at)} · from tracking · Velocity received ${c.line_received_individual ?? 0} of ${c.line_ordered_individual ?? "?"}`
+      : c.outcome === "replacement" && c.replacement_shipped_at ? `Replacement shipped ${fmtMD(c.replacement_shipped_at)}${c.replacement_order_id && c.replacement_order_id !== c.order_id ? ` on order ${c.replacement_order_id}` : ""}${replacementCarrierPhrase(c)}${suffix(c.replacement_shipped_source)}`
       : returnPending(c) && c.return_shipped_at ? `Return shipped ${fmtMD(c.return_shipped_at)}${carrierPhrase(c)}${suffix(c.return_shipped_source)}`
       : returnPending(c) && returnSentAt(c) ? `Dropped off ${fmtMD(returnSentAt(c))} · waiting for the first carrier scan`
       : "Return on its way to the supplier";
@@ -124,6 +152,8 @@ export function stateSentence(c: UiClaim, b: BucketResult): string {
       // row 6: delivered to the supplier, the refund confirmation to come
       if (c.return_required && c.return_delivered_at && !supplierConfirmedAt(c)) return `Return delivered ${fmtMD(c.return_delivered_at)}${suffix(c.return_delivered_source)} · waiting for the refund confirmation`;
       const reply = c.last_supplier_reply_at ? `Supplier replied ${fmtMD(c.last_supplier_reply_at)}` : null;
+      // §3.13 row 2: a replacement promised, nothing shipped yet
+      if (c.outcome === "replacement") return `Replacement promised ${fmtMD(replacementPromisedAt(c))} · waiting for the shipping email or tracking`;
       if (c.outcome && !c.supplier_confirmed_at) return `${reply ?? reportedText(c)} · ${outcomeWord(c)} promised · no confirmation yet`;
       return emailed(c) ? `Canceled per the supplier's email ${fmtMD(c.found_at)} · no refund seen yet` : c.kind === "canceled" ? `Canceled ${fmtMD(c.found_at)} · no refund seen yet` : `${reply ?? reportedText(c)} · no answer yet`;
     }
@@ -140,8 +170,10 @@ const isReturnByWarning = (t: { kind: string; reason?: string | null }) => t.kin
 function checkOnItSentence(c: UiClaim, reason: string | null): string {
   if (!reason) return "Timed out · check on it";
   if (TIMEOUT_REASON_RE.test(reason)) {
-    const core = reason.replace(TIMEOUT_REASON_RE, "");
-    return / · no /.test(core) ? `${capital(core)} in ${BUSINESS_DAYS} business days` : `${capital(core)} · ${BUSINESS_DAYS} business days`;
+    const core = reason.replace(TIMEOUT_REASON_RE, ""), n = Number(/^(\d+)/.exec(reason)?.[1] ?? BUSINESS_DAYS);
+    // §3.13 row 7: "Replacement delivered 11/6 · Velocity received 2 of 3 · 3 business days since delivery"
+    if (/Velocity received/.test(core)) return `${capital(core)} · ${n} business days since delivery`;
+    return / · no /.test(core) ? `${capital(core)} in ${n} business days` : `${capital(core)} · ${n} business days`;
   }
   if (/^return by /i.test(reason)) return `${capital(reason)} · label ${c.return_label_source === "upload" ? "uploaded" : "saved"} ${fmtMD(returnLabelAt(c))}, not shipped yet`;
   return capital(reason);
@@ -156,11 +188,11 @@ export interface PrimaryAction {
   taskId?: number;
   taskKind?: string;
   /** The second control beside the button (commit 6: Not this claim / Set outcome / Nothing to do beside the email tasks' buttons; commit 7: No label beside Upload label). */
-  secondary: "dismiss" | "snooze" | "not_this" | "set_outcome" | "nothing" | "no_label" | null;
+  secondary: "dismiss" | "snooze" | "not_this" | "set_outcome" | "nothing" | "no_label" | "not_reship" | "short" | null;
   /** The row's links after its sentence (§3.12 rows 1 / 2): the saved label and the Velocity message to copy. */
   links?: { label_doc_id: number | null; copy_message: string | null } | null;
   /** The decision the tick sends (review_email_match: attach; closed_claim_email: reopen; read_reply: keep). */
-  decision?: "attach" | "reopen" | "keep";
+  decision?: "attach" | "reopen" | "keep" | "reship" | "arrived";
   /** The email the row's sentence links to ("open email"), from the task behind the action. */
   email?: { id: string; mailbox: string } | null;
   /** The tick needs this control before it can be saved. */
@@ -189,11 +221,16 @@ export function primaryAction(c: UiClaim, b: BucketResult): PrimaryAction {
   if ((t = by("enter_quantity"))) return { kind: "detail", label: "Enter quantity", taskId: t.id, taskKind: t.kind, secondary: null, needs: "qty" };
   if ((t = by("contact_supplier")) || (c.status === "open" && !isReported(c))) return { kind: "contact", label: "Contacted supplier", taskId: t?.id, taskKind: "contact_supplier", secondary: t && TIMEOUT_REASON_RE.test(t.reason ?? "") ? "snooze" : null };
   if ((t = by("follow_up_supplier"))) return { kind: "contact", label: "Followed up", taskId: t.id, taskKind: t.kind, secondary: "snooze" };
-  if ((t = by("confirm_reship_order"))) return { kind: "detail", label: "Add order #", taskId: t.id, taskKind: t.kind, secondary: null, needs: "order_id" };
+  // §3.13 row 4: It's the reship / It's not (the task carries the shipping email and the tracking row)
+  if ((t = by("confirm_reship_order"))) return t.payload?.tracking_id != null || t.payload?.order_id
+    ? { kind: "task", label: "It's the reship", taskId: t.id, taskKind: t.kind, secondary: "not_reship", decision: "reship", email: emailOf(t) }
+    : { kind: "detail", label: "Add order #", taskId: t.id, taskKind: t.kind, secondary: null, needs: "order_id" };
+  // row 6: a home PO's replacement delivered — Arrived (closes) / Short
+  if ((t = by("confirm_arrival"))) return { kind: "task", label: "Arrived", taskId: t.id, taskKind: t.kind, secondary: "short", decision: "arrived" };
   if ((t = by("upload_return_label"))) return { kind: "detail", label: "Upload label", taskId: t.id, taskKind: t.kind, secondary: "no_label" };
   if ((t = by("send_label"))) return { kind: "task", label: "Sent label", taskId: t.id, taskKind: t.kind, secondary: null, links: { label_doc_id: c.return_label_doc_id ?? null, copy_message: velocityMessage(c) } };
   if ((t = by("drop_off_return"))) return { kind: "task", label: "Dropped off", taskId: t.id, taskKind: t.kind, secondary: null, links: { label_doc_id: c.return_label_doc_id ?? null, copy_message: null } };
-  if ((t = by("tell_velocity_replacement"))) return { kind: "task", label: "Told Velocity", taskId: t.id, taskKind: t.kind, secondary: null };
+  if ((t = by("tell_velocity_replacement"))) return { kind: "task", label: "Told Velocity", taskId: t.id, taskKind: t.kind, secondary: null, links: { label_doc_id: null, copy_message: replacementMessage(c) } };
   if ((t = by("dispose_units"))) return { kind: "task", label: "Asked", taskId: t.id, taskKind: t.kind, secondary: null };
   if ((t = by("update_velocity_order"))) return { kind: "task", label: "Updated", taskId: t.id, taskKind: t.kind, secondary: null };
   if ((t = by("check_on_it"))) return { kind: "task", label: "Check on it", taskId: t.id, taskKind: t.kind, secondary: "snooze" };
@@ -223,6 +260,9 @@ export function groupHint(group: string, rows: ReadonlyArray<{ action: { taskKin
   if (group === "supplier" && kinds.has("read_reply")) return "replies to read";
   // returns (the list mockup 2026-11-13): Money and arrivals "returns you handle yourself" when its rows are returns
   if (group === "money" && (kinds.has("drop_off_return") || kinds.has("upload_return_label"))) return "returns you handle yourself";
+  // replacements (the list mockup 2026-11-14): Supplier "is this the reship?", Money and arrivals "home orders"
+  if (group === "supplier" && kinds.has("confirm_reship_order")) return "is this the reship?";
+  if (group === "money" && kinds.has("confirm_arrival")) return "home orders";
   return GROUP_HINTS[group] ?? "";
 }
 
@@ -259,7 +299,7 @@ export function stepActions(c: UiClaim): UiStep[] {
       case "received": handler = { type: "refund" }; break;
       case "closed": handler = outcome === "replacement" ? { type: "replacement_arrived" } : { type: "write_off" }; break;
       case "written_off": handler = { type: "write_off" }; break;
-      case "promised": handler = { type: "replacement_promised" }; break;
+      case "promised": handler = { type: "replacement_promised" }; break; // (no longer emitted; kept for an old row)
       case "tell_velocity": handler = { type: "task", task: "tell_velocity_replacement" }; break;
       case "shipped": handler = { type: "replacement_shipped" }; break;
       case "arrived": handler = { type: "replacement_arrived" }; break;
@@ -293,6 +333,17 @@ export function whatHappensNext(c: UiClaim, b: BucketResult): Array<{ when: "Now
       { when: "Then", text: `${carrier} shows delivered → Waiting on supplier for the refund confirmation` },
       { when: "Then", text: "refund email → Waiting on refund to post → you tick Received → Closed" },
       { when: "If it stalls", text: `no scan for ${BUSINESS_DAYS} business days, or delivered with no refund email in ${BUSINESS_DAYS} business days → Check on it${c.return_by && !c.return_shipped_at ? ` · return by ${fmtMD(c.return_by)}: a warning 3 days before` : ""}` },
+    ];
+  }
+  // a replacement on its way (§3.13, the detail mockup)
+  if (c.outcome === "replacement" && c.status === "open" && (b.bucket === "waiting_shipment" || b.bucket === "waiting_supplier")) {
+    const carrier = carrierWord(c.replacement_tracking?.carrier);
+    const velocity = c.ships_to !== "home";
+    const now = b.bucket === "waiting_supplier" ? `Waiting on supplier${timer} — the replacement is promised, no shipping email or tracking yet` : c.replacement_delivered_at ? `in Waiting on shipment — delivered ${fmtMD(c.replacement_delivered_at)}, Velocity's count still short` : "in Waiting on shipment — the carrier has the replacement";
+    return [
+      { when: "Now", text: now },
+      { when: "Then", text: velocity ? `Velocity's received count reaches ${c.line_ordered_individual ?? "all"} of ${c.line_ordered_individual ?? "the ordered units"} → Arrived → Closed, with no click` : `${carrier} shows delivered → Arrived / Short is yours to tick` },
+      { when: "If it stalls", text: velocity ? `no scan for ${BUSINESS_DAYS} business days, or delivered and Velocity still short after ${VELOCITY_SHORT_DAYS} business days → Check on it` : `no scan for ${BUSINESS_DAYS} business days → Check on it` },
     ];
   }
   if (c.return_required && c.return_delivered_at && b.bucket === "waiting_supplier") return [

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decideOrder, matchesFilter, qtyText, prefillMethod, productText, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, claimsGrid, resizableClaimColumn, CLAIMS_COL_WIDTHS_KEY, NOTE_CLAMP_LINES, type ClaimRowApi } from "./claims";
+import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decideOrder, matchesFilter, searchMatchHint, qtyText, prefillMethod, productText, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, claimsGrid, resizableClaimColumn, CLAIMS_COL_WIDTHS_KEY, NOTE_CLAMP_LINES, type ClaimRowApi } from "./claims";
 
 // The Claims page (SPEC §22 "Supplier claims" §5 amended 2026-11-12, commit 2b): URL state, the filter box, the view's rows, the Needs attention groups, the labels, the table.
 const row = (over: Partial<ClaimRowApi>): ClaimRowApi => ({
@@ -63,6 +63,14 @@ describe("Claims page URL state", () => {
   });
 });
 
+describe("the search hint (claims commit 8, §3.13 place 9)", () => {
+  it("names the other number the filter matched and its label; nothing when the order # itself matched", () => {
+    const c = { order_id: "9800114400217731", other_numbers: [{ id: 1, number: "R4600111200931", kind: "replacement_order", note: null, claim_id: 3344 }] };
+    expect(searchMatchHint(c, "R46001112")).toBe("matched: replacement order R4600111200931");
+    expect(searchMatchHint(c, "98001144")).toBeNull();
+    expect(searchMatchHint(c, "")).toBeNull();
+  });
+});
 describe("Needs attention groups, labels, the method prefill, the table", () => {
   it("a row sits under the server's group (its primary action's task group); rows without a group are left out", () => {
     const rows = [row({ id: 1, group: "decide" }), row({ id: 2, group: "timed_out" }), row({ id: 3, group: null }), row({ id: 4, group: "decide" })];

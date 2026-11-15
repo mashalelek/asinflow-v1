@@ -3,7 +3,6 @@
 // ASIN row shows the union of its lines; the PO the union of all its lines.
 // Setting an item on an ASIN writes it to ALL its lines; removing it removes
 // it from all its lines; a product edit touches that line only. Pure.
-import { replacementTrackingItemsSql } from "./tracking-replacement-pair";
 import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
 
 /** Display-ordered union of several action-item arrays. */
@@ -44,8 +43,30 @@ export function asinWriteThrough(lines: Array<{ id: string; action_items: readon
 const packMissing = (a: string) => `(${a}.sold_as IS NULL AND EXISTS (SELECT 1 FROM po_line_expected lx WHERE lx.po_asin_id = ${a}.id
   AND COALESCE(lx.ordered_product, 0) > 0 AND NOT lx.fully_canceled AND COALESCE(lx.expected_product, 0) > 0)
   AND EXISTS (SELECT 1 FROM purchase_orders px WHERE px.id = ${a}.po_id AND px.closed_at IS NULL))`;
-/** Received known and different from shipped (NULL received = SC has reported nothing yet: no flag). */
-const receivingMismatch = (a: string) => `(${a}.qty_received_amazon IS NOT NULL AND ${a}.qty_received_amazon <> COALESCE(${a}.qty_shipped_fba, 0))`;
+// ── Dismiss with note (claims commit 8, §3.13 rows 10–13; po_warning_dismissals, migration 114) ──────────────────────
+// A dismissal keeps the numbers the warning stood on; the warning stays away while the numbers are the same and comes back
+// when they change (the old line stays as history). Four warnings dismiss: Extra units shipped, Pack size mismatch and FBA
+// receiving mismatch on an ASIN row (po_asin_id), Review Velocity on the PO (po_asin_id NULL). No invoice saved and Pack
+// size missing never do. A dismissed warning never blocks auto-close — the close set reads the same conditions.
+/** The numbers a dismissal of `type` on ASIN row `a` stands on — jsonb, compared whole. */
+export const DISMISSAL_QUANTITIES_SQL = (type: string, a: string): string => {
+  switch (type) {
+    case EXTRA_UNITS_SHIPPED: return `jsonb_build_object('shipped', ${a}.qty_shipped_fba, 'ordered', ${a}.qty)`;
+    case RECEIVING_MISMATCH: return `jsonb_build_object('received', ${a}.qty_received_amazon, 'shipped', COALESCE(${a}.qty_shipped_fba, 0))`;
+    case PACK_SIZE_MISMATCH: return `jsonb_build_object('velocity_pack', ${a}.velocity_units_per_pack, 'units_per_pack', ${a}.units_per_pack, 'sold_as', ${a}.sold_as,
+      'yield_lines', (SELECT count(*) FROM po_line_items ly WHERE ly.po_asin_id = ${a}.id AND ${yieldMismatchLine("ly", a)}))`;
+    default: throw new Error(`no dismissal quantities for ${type}`);
+  }
+};
+/** Review Velocity's numbers: the PO's open review reasons (alias p), sorted. */
+export const REVIEW_VELOCITY_QUANTITIES_SQL = (p: string) => `jsonb_build_object('reasons', to_jsonb(ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r
+  WHERE t.po_id = ${p}.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL
+  UNION SELECT 'Velocity has an order for a Home PO' WHERE (${p}.velocity_home_orders IS NOT NULL AND ${p}.ships_to = 'home' AND ${p}.velocity_home_cleared_at IS NULL) ORDER BY 1)))`;
+/** No live dismissal of `type` on row `a` with today's numbers. */
+const notDismissed = (type: string, a: string) => `NOT EXISTS (SELECT 1 FROM po_warning_dismissals d WHERE d.po_asin_id = ${a}.id AND d.warning_type = '${type}' AND d.undone_at IS NULL AND d.quantities_json = ${DISMISSAL_QUANTITIES_SQL(type, a)})`;
+const reviewNotDismissed = (p: string) => `NOT EXISTS (SELECT 1 FROM po_warning_dismissals d WHERE d.po_id = ${p}.id AND d.po_asin_id IS NULL AND d.warning_type = '${REVIEW_VELOCITY}' AND d.undone_at IS NULL AND d.quantities_json = ${REVIEW_VELOCITY_QUANTITIES_SQL(p)})`;
+/** Received known and different from shipped (NULL received = SC has reported nothing yet: no flag); not dismissed at these numbers. */
+const receivingMismatch = (a: string) => `(${a}.qty_received_amazon IS NOT NULL AND ${a}.qty_received_amazon <> COALESCE(${a}.qty_shipped_fba, 0) AND ${notDismissed(RECEIVING_MISMATCH, a)})`;
 export const RECEIVING_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${receivingMismatch("pk")})`;
 const packMismatchVelocity = (a: string) => `(${a}.sold_as IS NOT NULL AND ${a}.sold_as <> 'bundle' AND ${a}.velocity_units_per_pack IS NOT NULL AND ${a}.velocity_units_per_pack <> COALESCE(${a}.units_per_pack, 1))`;
 /**
@@ -58,12 +79,12 @@ export const yieldMismatchLine = (l: string, a: string) => `((${l}.retailer_unit
   AND NOT COALESCE((SELECT ROUND(${l}.asin_qty_per_product * kk.k) >= 1 AND ABS(${l}.asin_qty_per_product - ROUND(${l}.asin_qty_per_product * kk.k) / kk.k) <= 0.005000001
        FROM (SELECT (CASE WHEN ${a}.sold_as = 'individual' THEN 1 ELSE NULLIF(${a}.units_per_pack, 0) END)::numeric AS k) kk WHERE kk.k IS NOT NULL), false))`;
 const yieldMismatchRow = (a: string) => `EXISTS (SELECT 1 FROM po_line_items ly WHERE ly.po_asin_id = ${a}.id AND ${yieldMismatchLine("ly", a)})`;
-/** Shown: Velocity's pack differs, or a line's stored yield and the pack disagree. */
-const packMismatch = (a: string) => `(${packMismatchVelocity(a)} OR ${yieldMismatchRow(a)})`;
+/** Shown: Velocity's pack differs, or a line's stored yield and the pack disagree; not dismissed at these numbers. */
+const packMismatch = (a: string) => `((${packMismatchVelocity(a)} OR ${yieldMismatchRow(a)}) AND ${notDismissed(PACK_SIZE_MISMATCH, a)})`;
 /** Blocks auto-close: the yield half only on an open PO — a closed PO shows it but is never reopened by it (Maria 2026-11-06). */
-const packMismatchClose = (a: string) => `(${packMismatchVelocity(a)} OR (${yieldMismatchRow(a)} AND EXISTS (SELECT 1 FROM purchase_orders py WHERE py.id = ${a}.po_id AND py.closed_at IS NULL)))`;
-/** Shipped FBA over Ordered, not cleared by hand at (or above) the current shipped. */
-export const extraUnits = (a: string) => `(COALESCE(${a}.qty_shipped_fba, 0) > ${a}.qty AND (${a}.extra_units_cleared_shipped IS NULL OR ${a}.qty_shipped_fba > ${a}.extra_units_cleared_shipped))`;
+const packMismatchClose = (a: string) => `((${packMismatchVelocity(a)} OR (${yieldMismatchRow(a)} AND EXISTS (SELECT 1 FROM purchase_orders py WHERE py.id = ${a}.po_id AND py.closed_at IS NULL))) AND ${notDismissed(PACK_SIZE_MISMATCH, a)})`;
+/** Shipped FBA over Ordered, not dismissed with a note at these numbers (the pre-114 clear notes are dismissals, migration 114). */
+export const extraUnits = (a: string) => `(COALESCE(${a}.qty_shipped_fba, 0) > ${a}.qty AND ${notDismissed(EXTRA_UNITS_SHIPPED, a)})`;
 export const EXTRA_UNITS_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${extraUnits("pk")})`;
 export const PACK_SIZE_MISSING_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMissing("pk")})`;
 export const PACK_SIZE_MISMATCH_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${packMismatch("pk")})`;
@@ -87,8 +108,7 @@ export const ASIN_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_asin_id = p
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${extraUnits("pa")}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${packMissing("pa")}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${packMismatch("pa")}
-  UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${receivingMismatch("pa")}
-  ${replacementTrackingItemsSql("pa.po_id")})`;
+  UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${receivingMismatch("pa")})`;
 /**
  * "Review Velocity" (SPEC §26) condition: a tracking row of the PO has a
  * review reason and was not cleared by hand. Since PO table v2 the item itself
@@ -101,21 +121,19 @@ export const HOME_PO_REVIEW_REASON = "Velocity has an order for a Home PO";
  * is corrected or it is cleared by hand (velocity_home_cleared_at).
  */
 export const HOME_PO_REVIEW_OPEN_SQL = `(p.velocity_home_orders IS NOT NULL AND p.ships_to = 'home' AND p.velocity_home_cleared_at IS NULL)`;
-export const REVIEW_VELOCITY_EXISTS_SQL = `(EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL) OR ${HOME_PO_REVIEW_OPEN_SQL})`;
+export const REVIEW_VELOCITY_EXISTS_SQL = `((EXISTS (SELECT 1 FROM po_tracking t WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL) OR ${HOME_PO_REVIEW_OPEN_SQL}) AND ${reviewNotDismissed("p")})`;
 /** The PO's items that block auto-close: everything except FBA receiving mismatch (received never drives anything). An OPEN claim blocks too, but as its own rule (D15, po-close.ts), not as an item. */
 export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
-  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL}
-  ${replacementTrackingItemsSql("p.id")})`;
+  UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL})`;
 /** The PO's displayed items: the close set plus FBA receiving mismatch and No invoice saved. */
 export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${RECEIVING_MISMATCH_EXISTS_SQL}
-  UNION SELECT '${NO_INVOICE_SAVED}' WHERE ${NO_INVOICE_EXISTS_SQL("p")}
-  ${replacementTrackingItemsSql("p.id")})`;
+  UNION SELECT '${NO_INVOICE_SAVED}' WHERE ${NO_INVOICE_EXISTS_SQL("p")})`;
 /** The open review reasons of a PO (alias p), for the Action Items tooltip. */
 export const REVIEW_VELOCITY_REASONS_SQL = `ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r
   WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL

@@ -38,7 +38,7 @@ import { fmtQty } from "@/lib/po-qty";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 import { QTY_KIND } from "@shared/quantity-kinds";
 import { CLAIM_BUCKET_LABELS, CLAIM_BUCKET_TABS, TASK_GROUPS, TASK_GROUP_LABELS, type ClaimBucket, type ClaimStep, type TaskGroup } from "@shared/claim-bucket";
-import { groupHint, velocityMessage, sourceWord, carrierWord, type PrimaryAction, type UiStep, type StepHandler } from "@shared/claim-ui";
+import { groupHint, velocityMessage, replacementMessage, sourceWord, carrierWord, type PrimaryAction, type UiStep, type StepHandler } from "@shared/claim-ui";
 import { carrierStatusText } from "@shared/carrier-status";
 import { carrierTrackingUrl } from "@/components/po-tracking";
 import { CLAIM_KINDS, CLAIM_KIND_LABELS, CLAIM_OUTCOMES, CLAIM_OUTCOME_LABELS, QTY_UNKNOWN_LABEL, SHEET_ZEROED_LABEL, type ClaimKind, type ClaimOutcome, type ClaimTaskKind } from "@shared/supplier-claim";
@@ -57,6 +57,11 @@ export interface ClaimRowApi {
   return_by: string | null; return_by_source: string | null;
   return_shipped_at: string | null; return_shipped_source: string | null; return_delivered_at: string | null; return_delivered_source: string | null;
   return_tracking: { id: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location: string | null; delivered_at: string | null; velocity_tracking_status: string | null } | null;
+  /** The replacement (commit 8): delivered, Shipped's source, the reship's own order #, a short arrival, the line at Velocity, the tied inbound tracking row; the PO's other numbers with their labels. */
+  replacement_delivered_at: string | null; replacement_shipped_source: string | null; replacement_order_id: string | null; replacement_short_qty: number | null;
+  line_received_individual: number | null; line_ordered_individual: number | null;
+  replacement_tracking: { id: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location: string | null; delivered_at: string | null; retailer_order_id: string | null; pushed_velocity_ids: string[] | null } | null;
+  other_numbers: Array<{ id: number; number: string; kind: string; note: string | null; claim_id: number | null }>;
   supplier: string; order_id: string; order_date: string; ships_to: string | null; po_closed_at: string | null; alt_order_ids: string | null;
   asin: string | null; product_name: string | null; supplier_sku: string | null; line_no: number; ordered: number | null; product_pack: number | null; asin_pack: number | null; qty_basis: string | null;
   refunds: Array<{ id: number; amount: number | null; amount_applied: number | null; refunded_at: string | null; method: string | null }>;
@@ -105,6 +110,14 @@ export function matchesFilter(c: Pick<ClaimRowApi, "id" | "supplier" | "order_id
   const t = q.trim().toLowerCase().replace(/^#/, "");
   if (!t) return true;
   return [String(c.id), c.supplier, c.order_id, c.alt_order_ids ?? "", c.asin ?? "", c.supplier_sku ?? "", c.product_name ?? ""].some((v) => v.toLowerCase().includes(t));
+}
+const OTHER_NUMBER_WORDS: Record<string, string> = { replacement_order: "replacement order", previous_number: "previous number", invoice: "invoice #", confirmation: "confirmation #", other: "other" };
+/** Place 9 (§3.13): the filter matched one of the PO's other numbers, not its order # — "matched: replacement order R…". */
+export function searchMatchHint(c: Pick<ClaimRowApi, "order_id" | "other_numbers">, q: string): string | null {
+  const t = q.trim().toLowerCase().replace(/^#/, "");
+  if (!t || c.order_id.toLowerCase().includes(t)) return null;
+  const n = (c.other_numbers ?? []).find((x) => x.number.toLowerCase().includes(t));
+  return n ? `matched: ${OTHER_NUMBER_WORDS[n.kind] ?? n.kind} ${n.number}` : null;
 }
 /** The rows of a tab set: the filter, the kind, the PO date range (the Dashboard link); Dismissed is a tab of its own. */
 export function rowsForView(rows: readonly ClaimRowApi[], s: ClaimsUrlState): ClaimRowApi[] {
@@ -344,6 +357,8 @@ function DoCell({ claim, refresh, onRefund }: { claim: ClaimRowApi; refresh: () 
       {a.secondary === "not_this" && a.taskId && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => void call(`/api/pos/claims/tasks/${a.taskId}/done`, { decision: "not_this" })} data-testid={`button-not-this-${claim.id}`}>Not this claim</button>}
       {a.secondary === "nothing" && a.taskId && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => void call(`/api/pos/claims/tasks/${a.taskId}/done`, { decision: "nothing" })} data-testid={`button-nothing-${claim.id}`}>Nothing to do</button>}
       {a.secondary === "set_outcome" && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => navigate(`/claims/${claim.id}`)} data-testid={`button-set-outcome-${claim.id}`}>Set outcome</button>}
+      {a.secondary === "not_reship" && a.taskId && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => void call(`/api/pos/claims/tasks/${a.taskId}/done`, { decision: "not_reship" })} title="Not the reship — never proposed for this claim again" data-testid={`button-not-reship-${claim.id}`}>It's not</button>}
+      {a.secondary === "short" && <button type="button" className="lnk mut" style={{ marginLeft: 8 }} onClick={() => navigate(`/claims/${claim.id}#short`)} title="Not all of them arrived — set what is still missing on the claim" data-testid={`button-short-${claim.id}`}>Short</button>}
     </span>
   );
 }
@@ -413,10 +428,10 @@ function ClaimsList() {
             {groups.map((g) => (
               <section key={g.group} data-testid={`claims-group-${g.group}`}>
                 <div className="grp">{TASK_GROUP_LABELS[g.group]} <span>· {g.rows.length}{groupHint(g.group, g.rows) ? ` · ${groupHint(g.group, g.rows)}` : ""}</span></div>
-                <ClaimRows rows={g.rows} onRow={(c) => navigate(`/claims/${c.id}`)} refresh={() => void load()} onRefund={setRefundFor} />
+                <ClaimRows rows={g.rows} q={s.q} onRow={(c) => navigate(`/claims/${c.id}`)} refresh={() => void load()} onRefund={setRefundFor} />
               </section>))}
           </div>)}
-        {data && !needsAttention && <ClaimRows rows={rows} onRow={(c) => navigate(`/claims/${c.id}`)} refresh={() => void load()} onRefund={setRefundFor} />}
+        {data && !needsAttention && <ClaimRows rows={rows} q={s.q} onRow={(c) => navigate(`/claims/${c.id}`)} refresh={() => void load()} onRefund={setRefundFor} />}
         {data && needsAttention && <div className="mut" style={{ padding: "18px 12px 0", maxWidth: 900 }} data-testid="claims-emails-note">A matched refund email never shows here: it moves the claim straight to Waiting on refund to post. Every supplier reply does show here until you have read it. Feedback requests and "your case is resolved" notices on a closed claim are attached quietly.</div>}
       </div>
 
@@ -442,7 +457,7 @@ function RefundReceivedDialogBody({ claim, onDone, onCancel }: { claim: ClaimRow
 
 const ell = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
 /** The mockup's `.row`s: one grid row per claim, the Do column's controls stop the row click. */
-function ClaimRows({ rows, onRow, refresh, onRefund }: { rows: ClaimRowApi[]; onRow: (c: ClaimRowApi) => void; refresh: () => void; onRefund: (c: ClaimRowApi) => void }) {
+function ClaimRows({ rows, q = "", onRow, refresh, onRefund }: { rows: ClaimRowApi[]; q?: string; onRow: (c: ClaimRowApi) => void; refresh: () => void; onRefund: (c: ClaimRowApi) => void }) {
   if (rows.length === 0) return <div className="row mut" style={{ display: "block" }}>No claims here.</div>;
   return (
     <>
@@ -451,7 +466,7 @@ function ClaimRows({ rows, onRow, refresh, onRefund }: { rows: ClaimRowApi[]; on
         return (
           <div key={c.id} className="row" style={{ cursor: "pointer" }} onClick={() => onRow(c)} data-testid={`row-claim-${c.id}`}>
             <span className="chk" aria-hidden="true" />
-            <span style={{ minWidth: 0 }} onClick={(e) => e.stopPropagation()}><span style={{ display: "block", ...ell }} title={`claim #${c.id} · ${c.supplier}`}><span className="mut num" data-testid={`claim-number-${c.id}`}>#{c.id}</span> {c.supplier}</span><Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ display: "block", ...ell }} title={c.order_id}>{c.order_id}</Link></span>
+            <span style={{ minWidth: 0 }} onClick={(e) => e.stopPropagation()}><span style={{ display: "block", ...ell }} title={`claim #${c.id} · ${c.supplier}`}><span className="mut num" data-testid={`claim-number-${c.id}`}>#{c.id}</span> {c.supplier}</span><Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ display: "block", ...ell }} title={c.order_id}>{c.order_id}</Link>{searchMatchHint(c, q) ? <span className="mut" style={{ display: "block", fontSize: 11, ...ell }} data-testid={`search-match-${c.id}`}>{searchMatchHint(c, q)}</span> : null}</span>
             <span style={{ minWidth: 0 }}><span style={{ display: "block", ...ell }} title={p.main}>{p.main}</span><span className="mut" style={{ display: "block", ...ell }} title={p.sub}>{p.sub}</span></span>
             <span>{isRefundSuggestion(c) ? "refund" : CLAIM_KIND_LABELS[c.kind]}{c.status === "suggested" ? <span className="amb"> · {c.found_by === "email" ? "from email" : "suggested"}</span> : null}{c.status === "closed" && c.bucket === "needs_attention" ? <span className="mut"> · closed</span> : null}{c.outcome && c.status !== "suggested" && c.status !== "closed" ? <><br /><span className="mut">{CLAIM_OUTCOME_LABELS[c.outcome]}</span></> : null}</span>
             <span className={`num${c.qty == null ? " amb" : ""}`} data-testid={`claim-qty-${c.id}`}>
@@ -528,7 +543,7 @@ function OpenClaimDialog({ onClose, onOpened }: { onClose: () => void; onOpened:
 type Slot =
   | { kind: "contact" } | { kind: "reply" } | { kind: "confirm" } | { kind: "refund" } | { kind: "write_off" } | { kind: "remainder" } | { kind: "dismiss" } | { kind: "remove" } | { kind: "merge" }
   | { kind: "date"; step: "found" | "shipped" | "arrived" | "promised" | "return_sent" | "return_shipped" | "return_delivered"; label: string; initial?: string | null; taskId?: number | null }
-  | { kind: "return_label" } | { kind: "return_edit" };
+  | { kind: "return_label" } | { kind: "return_edit" } | { kind: "short" };
 
 /** The timeline's inline form slot: what a button or a step opened. */
 function SlotForm({ slot, d, call, close, reload }: { slot: Slot; d: ClaimDetailApi; call: (url: string, method: string, body?: unknown) => Promise<void>; close: () => void; reload: () => void }) {
@@ -568,6 +583,7 @@ function SlotForm({ slot, d, call, close, reload }: { slot: Slot; d: ClaimDetail
     }
     case "return_label": return <ReturnLabelForm claim={c} onDone={() => { close(); reload(); }} onCancel={close} />;
     case "return_edit": return <ReturnEditForm claim={c} onSave={async (f) => { await call(`/api/pos/claims/${c.id}/return`, "POST", f); close(); }} onCancel={close} />;
+    case "short": return <ShortForm claim={c} onSave={async (n) => { await call(`/api/pos/claims/${c.id}/replacement-short`, "POST", { arrived_qty: n }); close(); }} onCancel={close} />;
   }
 }
 
@@ -607,6 +623,21 @@ function ReturnLabelForm({ claim, onDone, onCancel }: { claim: ClaimRowApi; onDo
     </div>
   );
 }
+/** Short (§3.13 row 6): how many of the replacement units arrived — the rest stays open on the claim. */
+function ShortForm({ claim, onSave, onCancel }: { claim: ClaimRowApi; onSave: (n: string) => Promise<void>; onCancel: () => void }) {
+  const [n, setN] = useState("");
+  const expected = claim.replacement_qty ?? claim.qty ?? 0;
+  return (
+    <div data-testid="short-form">
+      <div style={{ fontWeight: 500, marginBottom: 10 }}>Replacement short</div>
+      <div style={fieldRow}>
+        <label className="mut" htmlFor="sf-n">Arrived</label><input className="f num" id="sf-n" type="number" min={0} max={Math.max(0, Number(expected) - 1)} step="any" value={n} onChange={(e) => setN(e.target.value)} style={{ width: 90 }} data-testid="input-short-arrived" /><span className="mut">of {fmtQty(expected)} Individual units</span>
+        <button type="button" className="btn p" disabled={!n.trim()} onClick={() => void onSave(n)} data-testid="button-short-save">Save</button><button type="button" className="lnk mut" onClick={onCancel}>cancel</button>
+      </div>
+      <div className="mut" style={{ marginTop: 8 }}>The rest stays open on this claim: report it to the supplier again. For all of them, tick Arrived instead.</div>
+    </div>
+  );
+}
 /** The Return card's edit: the return-by date and the tracking # (both by hand — never overwritten by an email or a scan). */
 function ReturnEditForm({ claim, onSave, onCancel }: { claim: ClaimRowApi; onSave: (f: { return_by?: string; carrier?: string | null; tracking_number?: string | null }) => Promise<void>; onCancel: () => void }) {
   const [f, setF] = useState({ return_by: claim.return_by ?? "", carrier: claim.return_tracking?.carrier ?? "", tracking_number: "" });
@@ -629,13 +660,14 @@ const EVENT_TITLES: Record<string, string> = {
   found: "Found", opened: "Opened", dismissed: "Dismissed", reported: "Contacted supplier", supplier_reply: "Supplier replied", outcome_set: "Outcome set", label_saved: "Return label received",
   return_shipped: "Return shipped", return_delivered: "Return delivered", supplier_confirmed: "Confirmed by supplier", refund_received: "Refund received", replacement_shipped: "Replacement shipped",
   replacement_arrived: "Replacement arrived", task_done: "Task done", amount_overridden: "$ owed overridden", remainder_written_off: "Remainder written off", reopened: "Reopened", closed: "Closed",
-  converted: "Converted", timed_out: "Timed out", snoozed: "Snoozed", followed_up: "Followed up", checked: "Checked on it", reship_confirmed: "Reship order # confirmed", refund_short: "Refund short",
+  converted: "Converted", timed_out: "Timed out", snoozed: "Snoozed", followed_up: "Followed up", checked: "Checked on it", reship_confirmed: "Reship confirmed", refund_short: "Refund short",
   email_attached: "Email attached", email_review: "An email may belong to this claim", email_dismissed: "Not this claim",
+  replacement_delivered: "Replacement delivered", reship_dismissed: "Not the reship",
 };
 /** The entries "Remove this entry" undoes (the server's REMOVABLE_EVENT_TYPES): the fact each records goes with it. */
 const REMOVABLE_EVENTS = ["reported", "followed_up", "checked", "supplier_reply", "supplier_confirmed", "refund_received", "outcome_set", "task_done", "timed_out", "email_attached", "email_review", "email_dismissed", "label_saved", "return_shipped", "return_delivered"];
 /** A ticked task's entry reads what the tick was (the detail mockup: "Sent label to Velocity · Discord · Maria"). */
-const TASK_DONE_TITLES: Record<string, string> = { send_label: "Sent label to Velocity", drop_off_return: "Dropped off", upload_return_label: "Return label", tell_velocity_replacement: "Told Velocity", dispose_units: "Asked Velocity to dispose", update_velocity_order: "Updated the Velocity order", read_reply: "Reply read", enter_quantity: "Quantity entered" };
+const TASK_DONE_TITLES: Record<string, string> = { send_label: "Sent label to Velocity", drop_off_return: "Dropped off", upload_return_label: "Return label", tell_velocity_replacement: "Told Velocity", dispose_units: "Asked Velocity to dispose", update_velocity_order: "Updated the Velocity order", read_reply: "Reply read", enter_quantity: "Quantity entered", confirm_arrival: "Arrival checked" };
 /** One timeline entry (the mockup's `.tl` cells: date · dot · entry), editable in place (summary and date) and removable (the fact it records is undone with it). */
 function TimelineEntry({ e, call, current }: { e: ClaimDetailApi["events"][number]; call: (url: string, method: string, body?: unknown) => Promise<void>; current: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -646,7 +678,7 @@ function TimelineEntry({ e, call, current }: { e: ClaimDetailApi["events"][numbe
   const title = `${taskLead && TASK_DONE_TITLES[taskLead[1]] ? TASK_DONE_TITLES[taskLead[1]] : EVENT_TITLES[e.type] ?? e.type.replace(/_/g, " ")}${amountLead ? ` · ${amountLead[1]}` : ""}`;
   const note = amountLead ? (e.summary ?? "").slice(amountLead[0].length) : taskLead && TASK_DONE_TITLES[taskLead[1]] ? (e.summary ?? "").slice(taskLead[0].length) : e.summary ?? "";
   // the return's tracking entries (commit 7): "· from tracking" after the title, like "· from email"
-  const fromTracking = !e.gmail_message_id && (e.type === "return_shipped" || e.type === "return_delivered") && (!!e.po_tracking_id || / · from tracking$/.test(e.summary ?? ""));
+  const fromTracking = !e.gmail_message_id && (e.type === "return_shipped" || e.type === "return_delivered" || e.type === "replacement_shipped" || e.type === "replacement_delivered") && / · from tracking$/.test(e.summary ?? "");
   const ok = ["refund_received", "supplier_confirmed", "closed", "replacement_arrived", "task_done", "reported", "supplier_reply", "followed_up", "checked", "reship_confirmed"].includes(e.type);
   return (
     <React.Fragment>
@@ -705,6 +737,7 @@ function ClaimDetailPage({ id }: { id: number }) {
     catch (e: any) { setError(e.message); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (window.location.hash === "#short") { setSlot({ kind: "short" }); history.replaceState(null, "", window.location.pathname); } }, []);
   const call = async (url: string, method: string, body?: unknown) => { try { await poApi(url, method, body); await load(); } catch (e: any) { toast({ title: "Not saved", description: e.message, variant: "destructive" }); throw e; } };
   if (error) return <div className="cl" style={{ padding: "14px 24px" }}><Link href="/claims">← Claims</Link><p style={{ color: "#c97b6a", marginTop: 12 }}>{error}</p></div>;
   if (!d) return <div className="cl mut" style={{ padding: "14px 24px" }}>Loading…</div>;
@@ -810,6 +843,7 @@ function ClaimDetailPage({ id }: { id: number }) {
               <span className={`v${c.reported_at ? "" : " mut"}`} data-testid="claim-reported">{c.reported_at ? <>{fmtMD(c.reported_at)}{c.reported_channel ? ` · ${c.reported_channel}` : ""}<button type="button" className="ed" onClick={() => setSlot({ kind: "contact" })}>edit</button></> : emailed ? "not needed (emailed cancellation)" : "— not yet"}</span>
               {c.status === "closed" && <><span className="mut">Closed</span><span className="v">{fmtMD(c.closed_at)}</span></>}
             </div>
+            {c.outcome === "replacement" && open && <div style={{ ...sectionLine, color: "#a39f96" }} data-testid="claim-replacement-note">The {fmtQty(c.replacement_qty ?? c.qty ?? 0)} units still count as expected on the PO until they arrive.</div>}
             <div style={{ ...sectionLine, color: "#a39f96" }}><InlineNoteBox value={c.note} label="note" testId="claim-note" onSave={async (v) => call(`/api/pos/claims/${c.id}`, "PATCH", { note: v })} /></div>
           </div>
 
@@ -823,6 +857,23 @@ function ClaimDetailPage({ id }: { id: number }) {
                 </div>))}
             </div>
           </div>
+
+          {c.outcome === "replacement" && (
+            <div className="card" data-testid="claim-replacement-card">
+              <div className="ct">Replacement</div>
+              <div className="kv" style={{ gridTemplateColumns: "110px 1fr" }}>
+                <span className="mut">Ships to</span><span className="v">{c.ships_to === "home" ? "home" : "Velocity"}</span>
+                <span className="mut">Units</span><span className="v num">{fmtQty(c.replacement_qty ?? c.qty ?? 0)} <span className="mut">Individual</span></span>
+                <span className="mut">Order #</span><span className="v" data-testid="replacement-order">{c.replacement_order_id && c.replacement_order_id !== c.order_id ? <><span className="num">{c.replacement_order_id}</span> <span className="mut">· replacement order on this PO</span></> : <><span className="num">{c.order_id}</span> <span className="mut">· same order</span></>}</span>
+                <span className="mut">Tracking</span><span className={`v${c.replacement_tracking?.tracking_number ? "" : " mut"}`} data-testid="replacement-tracking">{c.replacement_tracking?.tracking_number ? <a className="num" href={carrierTrackingUrl(String(c.replacement_tracking.carrier ?? ""), c.replacement_tracking.tracking_number) ?? "#"} target="_blank" rel="noreferrer">{carrierWord(c.replacement_tracking.carrier)} {c.replacement_tracking.tracking_number}</a> : "— none yet"}</span>
+                <span className="mut">Carrier</span><span className={`v${c.replacement_tracking?.carrier_status ? "" : " mut"}`} data-testid="replacement-carrier">{c.replacement_tracking ? (() => { const t = c.replacement_tracking!; const w = carrierStatusText(t); return [w ? w.text : null, t.last_scan_location, t.est_delivery_at && !t.delivered_at ? `due ${fmtMD(t.est_delivery_at)}` : t.delivered_at ? `delivered ${fmtMD(t.delivered_at)}` : null].filter(Boolean).join(" · ") || "no scan yet"; })() : "—"}</span>
+                {c.ships_to !== "home" && <><span className="mut">Velocity</span><span className="v" data-testid="replacement-velocity">{d.linked.velocity.length ? `order #${d.linked.velocity.map((v) => v.velocity_order_id).join(", #")} · ` : ""}received <span className="num">{fmtQty(c.line_received_individual ?? 0)}</span> of <span className="num">{c.line_ordered_individual == null ? "—" : fmtQty(c.line_ordered_individual)}</span></span></>}
+              </div>
+              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {c.ships_to !== "home" && <CopyMessageLink text={replacementMessage(c)} testId="button-copy-replacement-message" button="Copy message for Velocity" />}
+              </div>
+              <div className="mut" style={{ marginTop: 8 }}>A reship under a new order number shows here as "R… · replacement order on this PO".</div>
+            </div>)}
 
           {c.return_required && (
             <div className="card" data-testid="claim-return-card">
@@ -845,10 +896,10 @@ function ClaimDetailPage({ id }: { id: number }) {
           <div className="card" data-testid="claim-linked">
             {cardTitle("Linked")}
             <div className="kv" style={{ gridTemplateColumns: "90px 1fr" }}>
-              <span className="mut">PO</span><span style={{ minWidth: 0, ...ell }}><Link href={`/purchase-orders/${c.po_id}`} className="num">{c.order_id}</Link> · {d.po.closed_at ? "closed" : "open"}{d.linked.po_received_individual != null ? ` · ${fmtQty(d.linked.po_received_individual)} received` : ""}</span>
+              <span className="mut">PO</span><span style={{ minWidth: 0, ...ell }}><Link href={`/purchase-orders/${c.po_id}`} className="num">{c.order_id}</Link> · {d.po.closed_at ? "closed" : "open"}{c.outcome === "replacement" && c.line_received_individual != null && c.line_ordered_individual != null ? ` · ${fmtQty(c.line_received_individual)} of ${fmtQty(c.line_ordered_individual)} received` : d.linked.po_received_individual != null ? ` · ${fmtQty(d.linked.po_received_individual)} received` : ""}</span>
               <span className="mut">Velocity</span><span className={d.linked.velocity.length ? "" : "mut"} style={{ minWidth: 0, ...ell }}>{d.linked.velocity.length ? d.linked.velocity.map((v) => `inbound #${v.velocity_order_id} (${v.asin})`).join(", ") : "no order linked"}</span>
               <span className="mut">Emails</span><span className={emails.length ? "" : "mut"} style={{ minWidth: 0 }} data-testid="claim-linked-emails">{emails.length ? emails.map((e) => <div key={e.id} style={ell}><a href={emailUrl({ id: e.gmail_message_id!, mailbox: e.mailbox ?? "" })} target="_blank" rel="noreferrer">{fmtMD(e.at)} {emailSubject(e.summary)}</a></div>) : "none matched yet"}</span>
-              <span className="mut">Tracking</span><span className={d.linked.po_tracking.length || d.linked.tracking.length ? "" : "mut"} style={{ minWidth: 0 }}>{d.linked.tracking.filter((t) => t.direction === "return").map((t) => <div key={`r${t.id}`} className="num" style={ell} title={`${t.carrier} ${t.tracking_number} · return`}>{carrierWord(t.carrier)} {t.tracking_number} <span className="mut" style={{ fontFamily: "Inter,system-ui,sans-serif" }}>· return</span></div>)}{d.linked.po_tracking.length ? d.linked.po_tracking.map((t) => <div key={t.id} className="num" style={ell} title={`${t.carrier} ${t.tracking_number}`}>{t.carrier} {t.tracking_number} <span className="mut" style={{ fontFamily: "Inter,system-ui,sans-serif" }}>{t.delivered_at ? `delivered ${fmtMD(t.delivered_at)}` : t.carrier_status?.replace(/_/g, " ") ?? ""}</span></div>) : d.linked.tracking.some((t) => t.direction === "return") ? null : "none"}</span>
+              <span className="mut">Tracking</span><span className={d.linked.po_tracking.length || d.linked.tracking.length ? "" : "mut"} style={{ minWidth: 0 }}>{d.linked.tracking.filter((t) => t.direction === "return").map((t) => <div key={`r${t.id}`} className="num" style={ell} title={`${t.carrier} ${t.tracking_number} · return`}>{carrierWord(t.carrier)} {t.tracking_number} <span className="mut" style={{ fontFamily: "Inter,system-ui,sans-serif" }}>· return</span></div>)}{d.linked.tracking.filter((t) => t.direction !== "return").map((t) => <div key={`p${t.id}`} className="num" style={ell} title={`${t.carrier} ${t.tracking_number} · replacement`}>{carrierWord(t.carrier)} {t.tracking_number} <span className="mut" style={{ fontFamily: "Inter,system-ui,sans-serif" }}>· replacement</span></div>)}{d.linked.po_tracking.length ? d.linked.po_tracking.filter((t) => !d.linked.tracking.some((x) => x.id === t.id)).map((t) => <div key={t.id} className="num" style={ell} title={`${t.carrier} ${t.tracking_number}`}>{t.carrier} {t.tracking_number} <span className="mut" style={{ fontFamily: "Inter,system-ui,sans-serif" }}>{t.delivered_at ? `delivered ${fmtMD(t.delivered_at)}` : t.carrier_status?.replace(/_/g, " ") ?? ""}</span></div>) : d.linked.tracking.length ? null : "none"}</span>
               <span className="mut">Documents</span><span className={d.linked.documents.length ? "" : "mut"} style={{ minWidth: 0, ...ell }}>{d.linked.documents.length ? d.linked.documents.map((x) => x.file_name).join(", ") : "none"}</span>
               {c.alt_order_ids && <><span className="mut">Alt order #s</span><span className="num" style={ell}>{c.alt_order_ids}</span></>}
             </div>
@@ -883,7 +934,7 @@ function ClaimDetailPage({ id }: { id: number }) {
             {cardTitle("Refunds")}
             <div className="kv" style={{ gridTemplateColumns: "1fr auto auto" }} data-testid="claim-refunds">
               <span className="mut">Method</span><span className="mut">Applied</span><span className="mut">Date</span>
-              {c.refunds.length === 0 && <span className="mut" style={{ gridColumn: "1 / 4", padding: "6px 0" }}>{c.email_confirmed && c.supplier_confirmed_at ? `none received yet · supplier confirmed ${money(c.outcome_amount ?? c.remaining)} on ${fmtMD(c.supplier_confirmed_at)}` : "none yet"}</span>}
+              {c.refunds.length === 0 && <span className="mut" style={{ gridColumn: "1 / 4", padding: "6px 0" }} data-testid="claim-refunds-empty">{c.outcome === "replacement" && open ? `No refund on a replacement. If it never arrives, change the outcome and the ${money(c.amount_owed)} is owed again.` : c.email_confirmed && c.supplier_confirmed_at ? `none received yet · supplier confirmed ${money(c.outcome_amount ?? c.remaining)} on ${fmtMD(c.supplier_confirmed_at)}` : "none yet"}</span>}
               {c.refunds.map((r) => <React.Fragment key={r.id}><span data-testid={`claim-refund-${r.id}`} style={ell}>{(r.method ?? "refund").replace("_", " ")}</span><span className="num">{money(r.amount_applied ?? r.amount)}</span><span className="num">{fmtMD(r.refunded_at)}</span></React.Fragment>)}
               <span style={{ borderTop: "1px solid #2a2824", paddingTop: 8 }}>Remaining</span><span className={`num${c.remaining != null && c.remaining > 0 && open ? " amb" : ""}`} style={{ borderTop: "1px solid #2a2824", paddingTop: 8 }}>{money(c.remaining)}</span><span style={{ borderTop: "1px solid #2a2824" }} />
             </div>

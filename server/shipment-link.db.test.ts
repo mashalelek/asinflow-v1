@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
 import { linkUnmatchedLine } from "./shipment-link";
-import { clearExtraUnits } from "./extra-units";
+import { dismissWarning } from "./po-warning-dismiss";
+import { EXTRA_UNITS_SHIPPED } from "./po-status-map";
 import { extraUnits } from "./po-action-items";
 import { likeContains, stripShipmentSuffix } from "./order-number";
 
@@ -102,19 +103,18 @@ describe("Extra units shipped on the real schema (rolled back, 2026-10-29)", () 
     try {
       const { po, pa } = await seed(q);
       await q(`UPDATE po_asin_shipments SET qty_shipped = 7 WHERE po_asin_id = $1`, [pa]);
-      expect((await clearExtraUnits(q as any, pa, "", null)).status).toBe(400);
-      const ok = await clearExtraUnits(q as any, pa, "supplier sent 2 free", null);
-      expect(ok.status).toBe(200);
-      if (ok.status !== 200) return;
-      expect(ok.body.row.action_items).not.toContain("Extra units shipped");
-      expect(ok.body.row.extra_units_note).toBe("supplier sent 2 free");
-      expect((await q(`SELECT field, old_value, new_value FROM po_edit_log WHERE po_id = $1`, [po])).rows).toEqual([{ field: "extra_units_cleared", old_value: "7 of 5 ordered", new_value: "supplier sent 2 free" }]);
+      // claims commit 8: the clear is a dismissal with a note (po_warning_dismissals); the numbers at dismissal are kept
+      await expect(dismissWarning(q as any, { poAsinId: pa }, EXTRA_UNITS_SHIPPED, "", null)).rejects.toMatchObject({ status: 400 });
+      const ok = await dismissWarning(q as any, { poAsinId: pa }, EXTRA_UNITS_SHIPPED, "supplier sent 2 free", null);
+      expect(ok.dismissal).toMatchObject({ warning_type: EXTRA_UNITS_SHIPPED, note: "supplier sent 2 free", summary: "shipped 7 of 5" });
+      expect((await q(`SELECT field, old_value, new_value FROM po_edit_log WHERE po_id = $1`, [po])).rows).toEqual([{ field: "warning dismissed", old_value: "Extra units shipped · shipped 7 of 5", new_value: "supplier sent 2 free" }]);
       const items = async () => (await q(`SELECT 1 FROM po_asins pa WHERE pa.id = $1 AND ${extraUnits("pa")}`, [pa])).rows.length > 0;
+      expect(await items()).toBe(false);
       await q(`UPDATE po_asin_shipments SET qty_shipped = 8 WHERE po_asin_id = $1`, [pa]);
       expect(await items()).toBe(true);
       await q(`UPDATE po_asin_shipments SET qty_shipped = 5 WHERE po_asin_id = $1`, [pa]);
       expect(await items()).toBe(false);
-      expect((await clearExtraUnits(q as any, pa, "x", null)).status).toBe(409);
+      await expect(dismissWarning(q as any, { poAsinId: pa }, EXTRA_UNITS_SHIPPED, "x", null)).rejects.toMatchObject({ status: 409 });
     } finally { await q("ROLLBACK"); }
     expect((await client.query(`SELECT count(*)::int AS n FROM purchase_orders WHERE order_id = 'zz-extra-test'`)).rows[0].n).toBe(0);
   });

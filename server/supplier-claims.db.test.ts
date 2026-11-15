@@ -433,9 +433,9 @@ describe("commit 2b (§5 amended 2026-11-12): Supplier replied, clear the outcom
       // a second reply tells the outcome: replacement → the confirm task closes, the outcome is set, the steps change
       await recordReply(q, id, { date: "2026-11-07", channel: "email", summary: "shipping a replacement", outcome: "replacement" }, null);
       [row] = await loadClaimsPage(q, { po: s.po }, new Date("2026-11-09T15:00:00Z"));
-      expect(row).toMatchObject({ outcome: "replacement", bucket: "waiting_supplier" });
-      expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["replacement_arrived"]);
-      expect(row.ui_steps.map((x) => x.key)).toEqual(["found", "reported", "promised", "tell_velocity", "shipped", "arrived", "closed"]);
+      expect(row).toMatchObject({ outcome: "replacement", bucket: "needs_attention", group: "velocity" }); // commit 8 row 1: Tell Velocity first
+      expect(row.tasks.filter((t) => !t.done_at).map((t) => t.kind).sort()).toEqual(["replacement_arrived", "tell_velocity_replacement"]); // commit 8 row 1: a Velocity PO's replacement → Tell Velocity
+      expect(row.ui_steps.map((x) => x.key)).toEqual(["found", "reported", "answered", "tell_velocity", "shipped", "arrived", "closed"]); // commit 8: "Supplier answers · replacement" replaces Promised
       const ev = (await loadClaimEvents(q, id)).map((e) => e.type);
       expect(ev).toEqual(["opened", "reported", "supplier_reply", "supplier_reply", "outcome_set"]);
       const h = await history(q, s.po);

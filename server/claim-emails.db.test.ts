@@ -168,7 +168,7 @@ describe("§3.11 rows, end to end (real schema, rolled back)", () => {
       line("4", `"${e.subject}"`, r, "Confirm outcome → replacement", "Waiting on supplier (replacement promised)");
       await setOutcome(q, id, { outcome: "replacement" }, null);
       r = await row(q, id);
-      expect(r.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toEqual(["tell_velocity_replacement", "replacement_arrived"].filter((k) => r.tasks.some((t) => t.kind === k && !t.done_at)));
+      expect(r.tasks.filter((t) => !t.done_at).map((t) => t.kind).sort()).toEqual(["replacement_arrived", "tell_velocity_replacement"]); // commit 8 row 1: a Velocity PO's replacement → Tell Velocity
       expect(r.outcome).toBe("replacement");
     });
   });

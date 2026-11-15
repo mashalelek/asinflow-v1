@@ -48,6 +48,11 @@ export interface BucketClaim {
   /** The return's tracking row (direction = return) when one exists: the carrier's word for the Return card and the sentences. */
   return_tracking?: { id?: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location?: string | null; delivered_at: string | null } | null;
   replacement_shipped_at: string | null; replacement_arrived_at: string | null; qty_disposed: number | null;
+  /** The replacement (claims commit 8, §3.13): delivered (the carrier's scan), where Shipped came from, the reship's own order #, a short arrival, the
+   *  claim's line at Velocity (received / ordered, Individual) and the replacement's tracking row (an inbound row tied to the claim). */
+  replacement_delivered_at?: string | null; replacement_shipped_source?: string | null; replacement_order_id?: string | null; replacement_short_qty?: number | null;
+  line_received_individual?: number | null; line_ordered_individual?: number | null;
+  replacement_tracking?: { id?: number; carrier: string | null; tracking_number: string | null; carrier_status: string | null; est_delivery_at: string | null; last_scan_at: string | null; last_scan_location?: string | null; delivered_at: string | null } | null;
   /** owed − Σ applied; null when the $ is not known. */
   remaining: number | null; received?: number; qty?: number | null;
   tasks: ReadonlyArray<{ kind: ClaimTaskKind | string; done_at: string | null; created_at?: string; snoozed_until?: string | null; reason?: string | null }>;
@@ -149,7 +154,13 @@ export const returnSentAt = (c: BucketClaim): string | null => latest(doneAt(c, 
 /** A return on its way: return needed and not delivered yet. */
 export const returnPending = (c: BucketClaim): boolean => !!c.return_required && !c.return_delivered_at;
 /** The timeout reasons of a return (§3.12 row 8): they always make a Check on it, in every bucket. */
-const RETURN_REASON_RE = /^(?:label sent to Velocity|dropped off|return shipped|return delivered)\b/;
+const RETURN_REASON_RE = /^(?:label sent to Velocity|dropped off|return shipped|return delivered|replacement promised|replacement shipped|replacement delivered)\b/;
+/** The return reasons alone wait before a report (the supplier already answered with a label); a replacement promised still needs the report / answer behind it. */
+const RETURN_ONLY_RE = /^(?:label sent to Velocity|dropped off|return shipped|return delivered)\b/;
+/** When the replacement was promised: the outcome's confirmation / reply / report, whichever is known (§3.13). */
+export const replacementPromisedAt = (c: BucketClaim): string | null => c.last_supplier_reply_at ?? c.supplier_confirmed_at ?? doneAt(c, "confirm_outcome") ?? c.reported_at ?? doneAt(c, "contact_supplier") ?? c.found_at;
+/** Row 7 (D8): a replacement delivered to Velocity and the line still short → Check on it after this many business days. */
+export const VELOCITY_SHORT_DAYS = 3;
 /** Ticks that never restart the timer: the report (its date is the anchor) and Open claim on a suggestion. */
 export const NO_RESTART_TASK_KINDS: ReadonlySet<string> = new Set(["contact_supplier", "review_suggestion"]);
 export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
@@ -181,11 +192,16 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   }
 
   const outcome = c.outcome ?? null;
-  let bucket: ClaimBucket; let anchor: string | null; let reason: string;
+  let bucket: ClaimBucket; let anchor: string | null; let reason: string; let days = BUSINESS_DAYS;
   const disposeAsked = doneAt(c, "dispose_units"), orderChangeAsked = doneAt(c, "update_velocity_order"), toldVelocity = doneAt(c, "tell_velocity_replacement");
   const sentAt = returnSentAt(c), home = c.ships_to === "home";
-  if (outcome === "replacement" && c.replacement_shipped_at && !c.replacement_arrived_at) {
-    bucket = "waiting_shipment"; anchor = c.replacement_shipped_at; reason = "replacement shipped, not arrived";
+  if (outcome === "replacement" && c.replacement_delivered_at && !c.replacement_arrived_at && !home) {
+    // §3.13 row 7 (D8): delivered to Velocity, the line still short → 3 business days from the delivery, then Check on it
+    bucket = "waiting_shipment"; anchor = c.replacement_delivered_at; days = VELOCITY_SHORT_DAYS;
+    reason = `replacement delivered ${mdOf(c.replacement_delivered_at)} · Velocity received ${c.line_received_individual ?? 0} of ${c.line_ordered_individual ?? "?"}`;
+  } else if (outcome === "replacement" && c.replacement_shipped_at && !c.replacement_arrived_at) {
+    // rows 3 / 7: the carrier has the replacement — Waiting on shipment, the timer restarts on every scan
+    bucket = "waiting_shipment"; anchor = latest(c.replacement_shipped_at, c.replacement_tracking?.last_scan_at ?? null); reason = `replacement shipped ${mdOf(c.replacement_shipped_at)} · no new carrier scan`;
   } else if (returnPending(c) && c.return_shipped_at) {
     // §3.12 rows 5 / 8: the carrier has the return — Waiting on shipment from the first scan, the timer restarts on every scan
     bucket = "waiting_shipment"; anchor = latest(c.return_shipped_at, c.return_tracking?.last_scan_at ?? null); reason = `return shipped ${mdOf(c.return_shipped_at)} · no new carrier scan`;
@@ -202,10 +218,9 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
     bucket = "waiting_velocity"; anchor = disposeAsked; reason = "dispose asked, count not down";
   } else if (orderChangeAsked && !c.reported_at) {
     bucket = "waiting_velocity"; anchor = orderChangeAsked; reason = "order change asked";
-  } else if (outcome === "replacement" && toldVelocity) {
-    bucket = "waiting_shipment"; anchor = toldVelocity; reason = "replacement not shipped";
   } else if (outcome === "replacement") {
-    bucket = "waiting_supplier"; anchor = doneAt(c, "confirm_outcome") ?? c.reported_at ?? doneAt(c, "contact_supplier"); reason = "replacement promised, no shipment";
+    // rows 1 / 2 / 7: promised, not shipped — Waiting on supplier (Velocity told or a home PO) until a shipping email / tracking; its stall is a Check on it
+    bucket = "waiting_supplier"; anchor = latest(replacementPromisedAt(c), toldVelocity); reason = `replacement promised ${mdOf(replacementPromisedAt(c))} · no shipping email or tracking`;
   } else if (REFUND_OUTCOME_SET.has(outcome ?? "") && !c.supplier_confirmed_at) {
     bucket = "waiting_supplier"; anchor = doneAt(c, "confirm_outcome") ?? c.reported_at ?? doneAt(c, "contact_supplier"); reason = "refund promised, no confirmation";
   } else {
@@ -215,7 +230,7 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   // The timer never starts before the supplier was contacted (Maria 2026-11-12): an unreported claim — no report date,
   // no Contact supplier tick, no confirmation, not an emailed cancellation — waits for the Contacted supplier action in
   // Needs attention, whether or not its contact_supplier task exists (a converted claim may lack it).
-  if (bucket === "waiting_supplier" && !isReported(c) && !RETURN_REASON_RE.test(reason)) return { ...none, since: new Date(ts(c.found_at) ?? Date.now()).toISOString() };
+  if (bucket === "waiting_supplier" && !isReported(c) && !RETURN_ONLY_RE.test(reason)) return { ...none, since: new Date(ts(c.found_at) ?? Date.now()).toISOString() };
   // Every tick restarts the timer (a snooze is such a tick) — except Contact supplier, whose typed report date
   // (reported_at) is the anchor itself; without a typed date its tick is the anchor through doneAt above, and except
   // Open claim on a suggestion (review_suggestion), which makes the claim and is no wait (Maria 2026-11-12: the Walmart
@@ -225,15 +240,15 @@ export function deriveBucket(c: BucketClaim, now: Date): BucketResult {
   const restart = latest(...c.tasks.filter((t) => t.done_at && (!NO_RESTART_TASK_KINDS.has(t.kind) || (t.kind === "contact_supplier" && TIMEOUT_REASON_RE.test(t.reason ?? "")))).map((t) => t.done_at), bucket === "waiting_supplier" ? c.last_supplier_reply_at ?? null : null);
   // normalized to an ISO instant (a date-only anchor such as reported_at reads as noon UTC)
   const since = new Date(ts(latest(anchor, restart) ?? c.found_at) ?? Date.now()).toISOString();
-  const dueDate = addBusinessDays(since, BUSINESS_DAYS);
+  const dueDate = addBusinessDays(since, days);
   const snoozed = c.tasks.filter((t) => t.snoozed_until && ts(t.snoozed_until)! > now.getTime()).length > 0;
   const timedOut = !snoozed && now.getTime() >= dueDate.getTime();
   // a canceled claim's refund timing out is the one moment it gets a contact_supplier task (§3.4 "contact_supplier appears only if the refund times out")
   const timeout = bucket === "waiting_supplier" && !RETURN_REASON_RE.test(reason)
-    ? { kind: "follow_up_supplier" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` }
+    ? { kind: "follow_up_supplier" as const, reason: `${days} business days: ${reason}` }
     : c.kind === "canceled" && bucket === "waiting_refund"
-      ? { kind: "contact_supplier" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` }
-      : { kind: "check_on_it" as const, reason: `${BUSINESS_DAYS} business days: ${reason}` };
+      ? { kind: "contact_supplier" as const, reason: `${days} business days: ${reason}` }
+      : { kind: "check_on_it" as const, reason: `${days} business days: ${reason}` };
   return { bucket, since, due: dueDate.toISOString(), timedOut, timeout };
 }
 
@@ -255,9 +270,11 @@ export function claimSteps(c: BucketClaim): ClaimStep[] {
   // "Supplier answers · outcome" (mockup 2026-11-12): done once the supplier replied or the outcome is known; before the rest of the path
   if (!canceled && outcome !== "write_off" && outcome !== "replacement") steps.push({ key: "answered", label: outcome ? `Supplier answered · ${outcome.replace("_", " ")}` : "Supplier answers · outcome", done: !!outcome || !!c.last_supplier_reply_at || closed, at: c.last_supplier_reply_at ?? (outcome ? doneAt(c, "confirm_outcome") ?? c.supplier_confirmed_at : null), todo: "Supplier's answer" });
   if (outcome === "replacement") {
-    steps.push({ key: "promised", label: "Promised", done: true, at: promisedAt });
-    if (c.ships_to !== "home") steps.push({ key: "tell_velocity", label: "Tell Velocity", done: !!doneAt(c, "tell_velocity_replacement") || !!c.replacement_shipped_at || closed, at: doneAt(c, "tell_velocity_replacement") });
-    steps.push({ key: "shipped", label: "Shipped", done: !!c.replacement_shipped_at || !!c.replacement_arrived_at, at: c.replacement_shipped_at });
+    // §3.13 (the detail mockup): Supplier answers · replacement → Told Velocity (Velocity POs) → Shipped → Arrived; hand-set dates win
+    steps.push({ key: "answered", label: "Supplier answers · replacement", done: true, at: promisedAt });
+    const told = doneAt(c, "tell_velocity_replacement");
+    if (c.ships_to !== "home") steps.push({ key: "tell_velocity", label: told || c.replacement_shipped_at || closed ? "Told Velocity" : "Tell Velocity", done: !!told || !!c.replacement_shipped_at || closed, at: told });
+    steps.push({ key: "shipped", label: "Shipped", done: !!c.replacement_shipped_at || !!c.replacement_arrived_at, at: c.replacement_shipped_at, source: c.replacement_shipped_at ? c.replacement_shipped_source ?? null : null });
     steps.push({ key: "arrived", label: "Arrived", done: !!c.replacement_arrived_at, at: c.replacement_arrived_at });
   } else if (outcome === "write_off") {
     steps.push({ key: "written_off", label: "Written off", done: true, at: c.closed_at });
@@ -301,8 +318,8 @@ export function isReported(c: Pick<BucketClaim, "reported_at" | "supplier_confir
  */
 export function effectiveTasks<T extends { kind: string; done_at: string | null; reason?: string | null }>(c: Pick<BucketClaim, "reported_at" | "supplier_confirmed_at" | "kind" | "found_by"> & { tasks: ReadonlyArray<T> }): T[] {
   if (!isReported({ ...c, tasks: c.tasks as any })) return [...c.tasks];
-  // a timeout-created contact task (a canceled claim's refund not posted) is real; a report prompt on a reported claim is not
-  return c.tasks.filter((t) => !(t.kind === "contact_supplier" && !t.done_at && !TIMEOUT_REASON_RE.test(t.reason ?? "")));
+  // a timeout-created contact task (a canceled claim's refund not posted) and a "replacement short" report (§3.13 row 6) are real; a report prompt on a reported claim is not
+  return c.tasks.filter((t) => !(t.kind === "contact_supplier" && !t.done_at && !TIMEOUT_REASON_RE.test(t.reason ?? "") && !/^replacement short/i.test(t.reason ?? "")));
 }
 
 /** The row's "Next action": the open task, else what the timer waits for. */
@@ -311,7 +328,7 @@ export function nextAction(c: BucketClaim, b: BucketResult): string {
   if (open.length) return open.map((t) => CLAIM_TASK_LABELS[t.kind as ClaimTaskKind] ?? t.kind).join(" · ");
   if (b.bucket === "needs_attention" && c.status === "open" && !isReported(c)) return "Contact supplier";
   switch (b.bucket) {
-    case "waiting_supplier": return c.outcome && !c.supplier_confirmed_at ? "waiting for the supplier's confirmation" : "waiting for the supplier's answer";
+    case "waiting_supplier": return c.outcome === "replacement" ? "waiting for the shipping email or tracking" : c.outcome && !c.supplier_confirmed_at ? "waiting for the supplier's confirmation" : "waiting for the supplier's answer";
     case "waiting_shipment": return "waiting for the carrier";
     case "waiting_refund": return "waiting for the refund to post";
     case "waiting_velocity": return "waiting for Velocity";

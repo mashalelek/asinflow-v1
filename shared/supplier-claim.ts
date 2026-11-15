@@ -30,14 +30,16 @@ export const CLAIM_TASK_KINDS = ["review_suggestion", "confirm_outcome", "enter_
   // supplier emails (claims commit 6, §3.11): a reply to read (row 3), an email AF is not sure about (rows 2 / 7), an email on a closed claim (row 8)
   "read_reply", "review_email_match", "closed_claim_email",
   // returns (claims commit 7, §3.12 row 2): a home PO's return — Maria drops it off
-  "drop_off_return"] as const;
+  "drop_off_return",
+  // replacements (claims commit 8, §3.13 row 6): a home PO's replacement delivered — Arrived / Short
+  "confirm_arrival"] as const;
 export type ClaimTaskKind = (typeof CLAIM_TASK_KINDS)[number];
 export const CLAIM_TASK_GROUP: Readonly<Record<ClaimTaskKind, "decide" | "supplier" | "velocity" | "money" | "timed_out">> = {
   review_suggestion: "decide", confirm_outcome: "decide", enter_quantity: "decide", contact_supplier: "supplier", follow_up_supplier: "supplier", confirm_reship_order: "supplier",
   send_label: "velocity", tell_velocity_replacement: "velocity", dispose_units: "velocity", update_velocity_order: "velocity",
   refund_received: "money", replacement_arrived: "money", upload_return_label: "money", check_on_it: "timed_out",
   read_reply: "supplier", review_email_match: "decide", closed_claim_email: "decide",
-  drop_off_return: "money",
+  drop_off_return: "money", confirm_arrival: "money",
 };
 export const CLAIM_TASK_LABELS: Readonly<Record<ClaimTaskKind, string>> = {
   review_suggestion: "Review suggestion", confirm_outcome: "Confirm outcome", enter_quantity: "Enter quantity", contact_supplier: "Contact supplier", follow_up_supplier: "Follow up with supplier",
@@ -45,7 +47,7 @@ export const CLAIM_TASK_LABELS: Readonly<Record<ClaimTaskKind, string>> = {
   dispose_units: "Ask Velocity to dispose / return", update_velocity_order: "Update the Velocity order", refund_received: "Refund received",
   replacement_arrived: "Replacement arrived", upload_return_label: "Upload return label", check_on_it: "Check on it",
   read_reply: "Read the reply", review_email_match: "Review email match", closed_claim_email: "Email on a closed claim",
-  drop_off_return: "Drop off the return",
+  drop_off_return: "Drop off the return", confirm_arrival: "Replacement delivered · did all arrive?",
 };
 /** Email-made tasks (commit 6): the row shows the task's sentence with an "open email" link. */
 export const EMAIL_TASK_KINDS: ReadonlySet<string> = new Set(["read_reply", "review_email_match", "closed_claim_email"]);

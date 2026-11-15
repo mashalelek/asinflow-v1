@@ -17,6 +17,8 @@ export interface TrackingRow {
   push_error: string | null; pushed_at: string | null; pushed_velocity_ids: string[] | null; source: string;
   items_json: Array<{ name: string; qty: number }> | null; suppressed_at: string | null; reassigned_at: string | null;
   reassigned_from_order_id?: string | null;
+  /** Claims commit 8 (§3.13 place 8): the claim this row is tied to and the label of the order # its email carried when that is one of the PO's other numbers. */
+  claim_id?: number | null; direction?: string | null; order_number_kind?: string | null;
   /** 2026-11-04 (migration 086): this PO's units in the shipment, when the email states them; shared_with = the other PO(s) on the same number. */
   qty?: string | number | null; shared_with?: string[] | null;
   /** Carrier status (SPEC §26 "Carrier status — EasyPost", 2026-11-11): EasyPost's words, Velocity's as the fallback. */
@@ -147,7 +149,7 @@ export function PoTrackingTab({ poId, onChanged, perProductUnit }: { poId: strin
                     {(r.qty != null || r.shared_with?.length) ? <div className="text-[10px] text-muted-foreground">{r.qty != null ? <span title="Product units, as the supplier's email states them · the Individual equivalent beside it">{trackingQtyText(Number(r.qty), perProductUnit)}</span> : ""}{r.qty != null && r.shared_with?.length ? " · " : ""}{r.shared_with?.length ? `also on ${r.shared_with.join(", ")}` : ""}</div> : null}
                     {r.items_json?.length ? <div className="text-[10px] text-muted-foreground truncate" title={r.items_json.map((i) => `${i.qty} × ${i.name}`).join("; ")}>{r.items_json.map((i) => `${i.qty} × ${i.name}`).join("; ")}</div> : null}
                   </td>
-                  <td className="pr-2 font-mono break-all">{r.retailer_order_id ?? "—"}</td>
+                  <td className="pr-2 font-mono break-all">{r.retailer_order_id ?? "—"}{r.order_number_kind === "replacement_order" && r.claim_id ? <span className="font-sans text-muted-foreground"> · replacement order · <a className="underline-offset-2 hover:underline" href={`/claims/${r.claim_id}`} onClick={(e) => e.stopPropagation()} data-testid={`tracking-claim-${r.id}`}>claim #{r.claim_id}</a></span> : r.order_number_kind ? <span className="font-sans text-muted-foreground"> · {String(r.order_number_kind).replace("_", " ")}</span> : r.direction === "return" && r.claim_id ? <span className="font-sans text-muted-foreground"> · return · <a className="underline-offset-2 hover:underline" href={`/claims/${r.claim_id}`} onClick={(e) => e.stopPropagation()}>claim #{r.claim_id}</a></span> : null}</td>
                   <td className="pr-2">{fmt(r.shipped_at)}</td>
                   <td className="pr-2">{r.ship_to_street ?? "—"}</td>
                   <td className="pr-2">

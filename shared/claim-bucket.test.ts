@@ -118,11 +118,11 @@ describe("bucket derivation (§3.2): an open task wins, else the running timer",
     expect(b.timeout!.reason).toMatch(/refund not posted/);
     expect(deriveBucket({ ...confirmed, received: 20, remaining: 16.11 }, NOW).timeout!.reason).toMatch(/not posted in full/);
   });
-  it("replacement: promised → Waiting on supplier; told Velocity → Waiting on shipment; shipped → Waiting on shipment from the ship date; arrived closes", () => {
+  it("replacement: promised → Waiting on supplier (told Velocity restarts it, still Waiting on supplier until it ships — §3.13 row 2); shipped → Waiting on shipment from the ship date; arrived closes", () => {
     const promised = base({ outcome: "replacement", reported_at: "2026-11-03", tasks: [done("contact_supplier", "2026-11-03T15:00:00Z")] });
-    expect(deriveBucket(promised, NOW).bucket).toBe("waiting_supplier");
+    expect(deriveBucket(promised, NOW)).toMatchObject({ bucket: "waiting_supplier", timeout: { kind: "check_on_it", reason: "5 business days: replacement promised 11/3 · no shipping email or tracking" } });
     const told = { ...promised, tasks: [...promised.tasks, done("tell_velocity_replacement", "2026-11-04T15:00:00Z")] };
-    expect(deriveBucket(told, NOW)).toMatchObject({ bucket: "waiting_shipment", since: "2026-11-04T15:00:00.000Z" });
+    expect(deriveBucket(told, NOW)).toMatchObject({ bucket: "waiting_supplier", since: "2026-11-04T15:00:00.000Z" });
     const shipped = { ...told, replacement_shipped_at: "2026-11-05" };
     expect(deriveBucket(shipped, NOW)).toMatchObject({ bucket: "waiting_shipment", since: "2026-11-05T12:00:00.000Z", timedOut: false });
     expect(deriveBucket(shipped, new Date("2026-11-13T15:00:00Z")).timedOut).toBe(true); // Thu Nov 5 + 5 bd = Thu Nov 12
@@ -149,8 +149,8 @@ describe("the checklist (§3.4) and Next action", () => {
   });
   it("return steps show only on a return; replacement and write-off paths; an emailed cancellation skips Reported", () => {
     expect(claimSteps(base({ return_required: true })).map((x) => x.label)).toEqual(["Found", "Report", "Supplier answers · outcome", "Label", "Sent to Velocity", "Shipped", "Delivered", "Confirmed by supplier", "Received", "Closed"]);
-    expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03" })).map((x) => x.label)).toEqual(["Found", "Reported", "Promised", "Tell Velocity", "Shipped", "Arrived", "Closed"]);
-    expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03", ships_to: "home" })).map((x) => x.label)).toEqual(["Found", "Reported", "Promised", "Shipped", "Arrived", "Closed"]);
+    expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03" })).map((x) => x.label)).toEqual(["Found", "Reported", "Supplier answers · replacement", "Tell Velocity", "Shipped", "Arrived", "Closed"]);
+    expect(claimSteps(base({ outcome: "replacement", reported_at: "2026-11-03", ships_to: "home" })).map((x) => x.label)).toEqual(["Found", "Reported", "Supplier answers · replacement", "Shipped", "Arrived", "Closed"]);
     expect(claimSteps(base({ outcome: "write_off", status: "closed", closed_at: "2026-11-09", tasks: [open("dispose_units")] })).map((x) => x.label)).toEqual(["Found", "Reported", "Written off", "Dispose", "Closed"]);
     expect(claimSteps(base({ kind: "canceled", found_by: "email" })).map((x) => x.label)).toEqual(["Found", "Confirmed by supplier", "Received", "Closed"]); // an emailed cancellation needs no report and no answer
   });

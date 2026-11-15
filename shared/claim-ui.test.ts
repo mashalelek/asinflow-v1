@@ -28,10 +28,10 @@ describe("stateSentence — one plain sentence, never 'waiting' before the repor
   it("a reply, a promised outcome, a confirmation, a refund short, a replacement on its way, Velocity asked, closed, dismissed", () => {
     expect(sentence(base({ reported_at: "2026-11-05", last_supplier_reply_at: "2026-11-06T12:00:00Z" }))).toBe("Supplier replied 11/6 · no answer yet");
     expect(sentence(base({ reported_at: "2026-11-05", tasks: [open("confirm_outcome", 3, 'Supplier replied 11/6: "remaining 11 jars ship out tomorrow" → outcome?')] }))).toBe('Supplier replied 11/6: "remaining 11 jars ship out tomorrow" → outcome?');
-    expect(sentence(base({ reported_at: "2026-11-05", outcome: "replacement" }))).toBe("Reported 11/5 · replacement promised · no confirmation yet");
+    expect(sentence(base({ reported_at: "2026-11-05", outcome: "replacement" }))).toBe("Replacement promised 11/5 · waiting for the shipping email or tracking");
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "gift_card", supplier_confirmed_at: "2026-10-28T12:00:00Z", remaining: 42, received: 42 }))).toBe("Gift card confirmed 10/28 · check the gift card · short by $42.00");
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "refund_card", supplier_confirmed_at: "2026-10-28T12:00:00Z" }))).toBe("Refund confirmed 10/28 · check the card");
-    expect(sentence(base({ reported_at: "2026-11-05", outcome: "replacement", replacement_shipped_at: "2026-10-29" }))).toBe("Replacement shipped 10/29 · not arrived");
+    expect(sentence(base({ reported_at: "2026-11-05", outcome: "replacement", replacement_shipped_at: "2026-10-29" }))).toBe("Replacement shipped 10/29");
     expect(sentence(base({ reported_at: "2026-11-05", return_required: true, tasks: [done("send_label", "2026-11-10T12:00:00Z")] }))).toBe("Label sent 11/10 · waiting for the first carrier scan");
     expect(sentence(base({ reported_at: "2026-11-05", outcome: "write_off", tasks: [open("dispose_units")], qty: 18 }))).toBe("write-off · ask Velocity to dispose 18 units");
     expect(sentence(base({ status: "closed", closed_at: "2026-11-09", outcome: "refund_card" }))).toBe("Closed 11/9 · refund to card");
@@ -54,6 +54,8 @@ describe("primaryAction — ONE button per row, Dismiss / Snooze where they appl
       read_reply: ["Keep waiting", "set_outcome"], review_email_match: ["Attach", "not_this"], closed_claim_email: ["Reopen", "nothing"],
       // returns (commit 7, §3.12 row 2): a home PO's return
       drop_off_return: ["Dropped off", null],
+      // replacements (commit 8, §3.13 row 6): a home PO's replacement delivered — Arrived / Short
+      confirm_arrival: ["Arrived", "short"],
     };
     for (const k of CLAIM_TASK_KINDS) {
       // a contact_supplier task only means something on an unreported claim (one derivation, Maria 2026-11-12)
@@ -82,8 +84,8 @@ describe("stepActions — every step of every path has a handler", () => {
   it("refund path: found · report · supplier answers · confirmed · received · closed", () => {
     expect(handlers(base())).toEqual([["found", "edit_found"], ["reported", "contact"], ["answered", "reply"], ["confirmed", "confirm"], ["received", "refund"], ["closed", "write_off"]]);
   });
-  it("replacement path: promised · tell Velocity · shipped · arrived · closed (no Tell Velocity on a home PO)", () => {
-    expect(handlers(base({ outcome: "replacement", reported_at: "2026-11-05" }))).toEqual([["found", "edit_found"], ["reported", "contact"], ["promised", "replacement_promised"], ["tell_velocity", "task"], ["shipped", "replacement_shipped"], ["arrived", "replacement_arrived"], ["closed", "replacement_arrived"]]);
+  it("replacement path: supplier answers · tell Velocity · shipped · arrived · closed (no Tell Velocity on a home PO)", () => {
+    expect(handlers(base({ outcome: "replacement", reported_at: "2026-11-05" }))).toEqual([["found", "edit_found"], ["reported", "contact"], ["answered", "reply"], ["tell_velocity", "task"], ["shipped", "replacement_shipped"], ["arrived", "replacement_arrived"], ["closed", "replacement_arrived"]]);
     expect(handlers(base({ outcome: "replacement", reported_at: "2026-11-05", ships_to: "home" })).map((x) => x[0])).not.toContain("tell_velocity");
     expect(stepActions(base({ outcome: "replacement" })).find((s) => s.key === "tell_velocity")!.handler).toEqual({ type: "task", task: "tell_velocity_replacement" });
   });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parsePoListFilters, poListWhere, poFacetCounts } from "./po-list-filters";
-import { DISPLAY_ACTION_ITEMS, REPLACEMENT_TRACKING_ITEM } from "./po-status-map";
+import { DISPLAY_ACTION_ITEMS } from "./po-status-map";
 
 const placeholders = (sql: string) => Array.from(new Set(Array.from(sql.matchAll(/\$(\d+)/g)).map((m) => Number(m[1])))).sort((a, b) => a - b);
 
@@ -22,9 +22,6 @@ describe("POs list filters (2026-11-06)", () => {
     expect(noSup.where).toMatch(/p\.order_id ILIKE/);
     expect(poListWhere(f, "closed").where).toBe(all.where); // closed=all adds no condition
     expect(poListWhere({ ...f, closed: "open" }, "closed").where).not.toMatch(/closed_at IS NULL/);
-  });
-  it("the replacement pair's item is a real condition (until 2026-11-06 the filter ignored it and listed every PO)", () => {
-    expect(poListWhere({ ...parsePoListFilters({}), action: [REPLACEMENT_TRACKING_ITEM] }).where).toMatch(/p\.order_id = '200015663718988'/);
   });
   it("counts: five queries, each without its own facet; every display Action Item counted; placeholders consistent", async () => {
     const seen: Array<{ sql: string; params: unknown[] }> = [];

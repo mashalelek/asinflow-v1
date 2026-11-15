@@ -47,6 +47,8 @@ import { weightedPaymentPct, WEIGHTED_PAYMENT_LABEL } from "@shared/po-form";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
 
 interface PoRow {
+  /** claims commit 8 (§3.13 place 9): "number|kind" when the search matched one of the PO's other numbers. */
+  search_other?: string | null;
   id: string;
   order_id: string;
   order_date: string;
@@ -906,7 +908,7 @@ export default function PurchaseOrders() {
                     <PoClaimsCount claims={po.claims_open} orderId={po.order_id} />
                   </td>
                   <td style={poColStyle(colWidths, "order_date")} className="px-3 py-2 whitespace-nowrap">{fmtDate(po.order_date)}</td>
-                  <td style={poColStyle(colWidths, "order_id")} className="px-3 py-2 font-mono text-xs truncate" title={po.order_id} data-testid={`po-order-id-${po.order_id}`}>{po.order_id}</td>
+                  <td style={poColStyle(colWidths, "order_id")} className="px-3 py-2 font-mono text-xs truncate" title={po.order_id} data-testid={`po-order-id-${po.order_id}`}>{po.order_id}{po.search_other ? <div className="font-sans text-[10px] text-muted-foreground truncate" data-testid={`po-search-match-${po.order_id}`}>matched: {otherNumberWord(String(po.search_other).split("|")[1])} {String(po.search_other).split("|")[0]}</div> : null}</td>
                   <td style={poColStyle(colWidths, "supplier")} className="px-3 py-2 truncate" title={po.supplier}>{po.supplier}</td>
                   <td style={poColStyle(colWidths, "order_total")} className={`px-3 py-2 text-right font-mono ${money.muted ? "text-muted-foreground/50" : ""}`}>
                     {money.text}
@@ -983,6 +985,41 @@ export default function PurchaseOrders() {
 // detail tab and the POs page's nested rows.
 type PoAsinDetail = PoAsinRowData & { lines: PoAsinLine[] };
 type PoLine = PoAsinLine;
+export interface OtherNumberRow { id: number; number: string; kind: string; note: string | null; claim_id: number | null }
+export interface DismissalRow { id: number; po_asin_id: string | null; asin: string | null; warning_type: string; summary: string; note: string; dismissed_by_name: string | null; dismissed_at: string; undone_at: string | null }
+const OTHER_NUMBER_KINDS: ReadonlyArray<[string, string]> = [["replacement_order", "replacement order"], ["previous_number", "previous number"], ["invoice", "invoice #"], ["confirmation", "confirmation #"], ["other", "other"]];
+export const otherNumberWord = (kind: string | undefined) => OTHER_NUMBER_KINDS.find(([k]) => k === kind)?.[1] ?? kind ?? "";
+/** PO Details › Order card (claims commit 8, place 6): "R… · replacement order · claim #3344"; add with a label; relabel an unlabeled one; remove. */
+function OtherNumbers({ poId, numbers, onChanged }: { poId: string; numbers: OtherNumberRow[]; onChanged: () => void }) {
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState({ number: "", kind: "invoice", note: "" });
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => { setErr(null); try { await poApi(`/api/pos/${poId}/other-numbers`, "POST", f); setAdding(false); setF({ number: "", kind: "invoice", note: "" }); onChanged(); } catch (e: any) { setErr(e.message); } };
+  return (
+    <div className="text-right" data-testid="po-other-numbers">
+      {numbers.length === 0 && !adding && <span className="text-muted-foreground">—</span>}
+      {numbers.map((n) => (
+        <div key={n.id} className="text-xs" data-testid={`other-number-${n.id}`}>
+          <span className="font-mono">{n.number}</span> <span className="text-muted-foreground">· {otherNumberWord(n.kind)}{n.kind === "other" && !n.note ? " · no note yet" : ""}</span>
+          {n.claim_id != null && <> <span className="text-muted-foreground">·</span> <Link href={`/claims/${n.claim_id}`} className="underline-offset-2 hover:underline">claim #{n.claim_id}</Link></>}
+          {n.note && <span className="text-muted-foreground"> · {n.note}</span>}
+          {" "}<select className="ml-1 h-5 rounded border border-input bg-background text-[10px]" value={n.kind} title="Label" aria-label="Label" onChange={async (e) => { const kind = e.target.value; const note = kind === "other" && !n.note ? window.prompt("A short note: why is this number on the PO?") : undefined; if (kind === "other" && !note && !n.note) return; await poApi(`/api/pos/other-numbers/${n.id}`, "PATCH", { kind, ...(note ? { note } : {}) }); onChanged(); }} data-testid={`select-other-number-kind-${n.id}`}>{OTHER_NUMBER_KINDS.map(([k, w]) => <option key={k} value={k}>{w}</option>)}</select>
+          <button type="button" className="ml-1 text-[10px] text-muted-foreground hover:text-destructive" onClick={async () => { if (!window.confirm(`Remove ${n.number} from this PO?`)) return; await poApi(`/api/pos/other-numbers/${n.id}`, "DELETE"); onChanged(); }} data-testid={`button-remove-other-number-${n.id}`}>remove</button>
+        </div>))}
+      {adding ? (
+        <div className="mt-1 flex flex-wrap items-center justify-end gap-1 text-xs" data-testid="other-number-form">
+          <input className="h-6 w-36 rounded border border-input bg-background px-1 font-mono text-xs" placeholder="number" value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} data-testid="input-other-number" />
+          <select className="h-6 rounded border border-input bg-background text-xs" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })} data-testid="select-other-number-kind">{OTHER_NUMBER_KINDS.filter(([k]) => k !== "replacement_order" && k !== "previous_number").map(([k, w]) => <option key={k} value={k}>{w}</option>)}</select>
+          <input className="h-6 w-40 rounded border border-input bg-background px-1 text-xs" placeholder={f.kind === "other" ? "why (required)" : "note (optional)"} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} data-testid="input-other-number-note" />
+          <button type="button" className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50" disabled={!f.number.trim() || (f.kind === "other" && !f.note.trim())} onClick={() => void save()} data-testid="button-save-other-number">Add</button>
+          <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setAdding(false)}>cancel</button>
+          {err && <span className="text-destructive">{err}</span>}
+        </div>
+      ) : <button type="button" className="mt-0.5 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setAdding(true)} data-testid="button-add-other-number">+ add a number</button>}
+      <div className="text-[10px] text-muted-foreground mt-0.5">A reship's number is added by "It's the reship" on its claim; a rename keeps the old one as the previous number.</div>
+    </div>
+  );
+}
 interface PoDetail {
   po: Record<string, any> & { invoice_file_name: string };
   summary: { asin_count: number; units_ordered: number; /** Σ ASIN units × Individual units per ASIN unit over the rows with a pack size (2026-11-09); rows_missing_pack counts the rest. */ individual_units?: number | null; rows_missing_pack?: number; units_received: number | null; order_total: string | null; cogs_total: string | null };
@@ -994,6 +1031,8 @@ interface PoDetail {
   claims?: PoClaim[];
   /** PO documents (SPEC §22): the Documents tab. */
   documents?: PoDocument[];
+  other_numbers?: OtherNumberRow[];
+  dismissals?: DismissalRow[];
 }
 
 // NULL → muted em-dash; $0.00 muted; all money neutral.
@@ -1148,6 +1187,8 @@ export function PurchaseOrderDetailPlaceholder() {
             ["Ships to", po.ships_to === "home" ? "Home" : "Velocity"],
             ["Status", po.closed_at ? "Closed" : "Open"],
             ["Action Items", actionItems.join(", ") || "—"],
+            // claims commit 8 (§3.13 place 6): every other number on the PO says why it is there — never a bare "alternate"
+            ["Other numbers", <OtherNumbers poId={po.id} numbers={data.other_numbers ?? []} onChanged={reload} />],
           ]} />
           <DetailCard title="Money" rows={[
             ["Subtotal", <Money v={po.subtotal} />],
@@ -1161,7 +1202,6 @@ export function PurchaseOrderDetailPlaceholder() {
           <DetailCard title="Meta" rows={[
             ["Purchased by", <Dash v={po.purchased_by} />],
             ["Email used", <Dash v={po.email_used} />],
-            ...(po.alt_order_ids ? [["Alternate order #s", <span className="font-mono text-xs">{po.alt_order_ids}</span>] as [string, JSX.Element]] : []),
             ["Source", <Dash v={po.source === "sheet_import" ? "Orders sheet" : po.source === "extension" ? "Capture PO" : po.source === "email_renewal" ? "Subscription renewal (email)" : po.source === "manual" ? "New PO form" : po.source} />],
             ["Subscription", po.subscription ? "Yes" : "No"],
             // Derived (SPEC §22 "PO documents"): Yes when the PO has a document; the sheet's old Rcpt flag is not read.
@@ -1195,6 +1235,19 @@ export function PurchaseOrderDetailPlaceholder() {
           <div className="rounded-md p-3" style={{ border: "0.5px solid hsl(var(--border))" }} data-testid="po-detail-notes">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Notes</div>
             <InlineNoteBox value={po.notes} label="PO note" testId="po-detail" onSave={async (v) => { await poApi(`/api/pos/${po.id}`, "PATCH", { notes: v }); reload(); }} />
+            {/* claims commit 8 (§3.13 rows 11–12, docs/mockups/po-warning-dismiss-2026-11-14.html): the warnings dismissed with a note, with undo; an undone or outdated line stays as history */}
+            {(data.dismissals?.length ?? 0) > 0 && (
+              <div className="mt-2 pt-2" style={{ borderTop: "0.5px solid hsl(var(--border))" }} data-testid="po-dismissed-warnings">
+                <div className="text-[11px] text-muted-foreground mb-1">Dismissed warnings</div>
+                <ul className="space-y-1 text-xs">
+                  {(data.dismissals ?? []).map((d) => (
+                    <li key={d.id} data-testid={`dismissal-${d.id}`} className={d.undone_at ? "opacity-60" : ""}>
+                      <span className={`inline-block rounded-sm px-1.5 py-0.5 text-[11px] bg-amber-500/10 text-amber-600 dark:text-amber-400 ${d.undone_at ? "line-through" : ""}`} style={{ opacity: 0.75 }}>{d.warning_type}</span>
+                      {" "}<span className="text-muted-foreground">{d.asin ? <span className="font-mono">{d.asin}</span> : "PO"} · {d.summary} ·</span> {d.note} <span className="text-muted-foreground">· {d.dismissed_by_name ?? "AF"} {fmtDate(d.dismissed_at)}{d.undone_at ? ` · undone ${fmtDate(d.undone_at)}` : ""} ·</span>
+                      {!d.undone_at && <> <button type="button" className="underline-offset-2 hover:underline" onClick={async () => { await poApi(`/api/pos/warning-dismissals/${d.id}/undo`, "POST", {}); reload(); }} data-testid={`button-undo-dismissal-${d.id}`}>undo</button></>}
+                    </li>))}
+                </ul>
+              </div>)}
           </div>
         </div>
       )}

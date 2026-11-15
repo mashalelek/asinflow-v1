@@ -9,7 +9,6 @@ import { LEGACY_ACTION_ITEMS, RENAMED_DERIVED_ITEMS, ACTION_ITEMS, REVIEW_VELOCI
 import { openLineItemsSql, PACK_SIZE_MISSING_EXISTS_SQL, PACK_SIZE_MISMATCH_EXISTS_SQL, RECEIVING_MISMATCH_EXISTS_SQL, EXTRA_UNITS_EXISTS_SQL, NO_INVOICE_EXISTS_SQL } from "./po-action-items";
 import { refundsFilterCond } from "./po-queries";
 import { OPEN_CLAIM_PO_SQL } from "./supplier-claim-sql";
-import { replacementTrackingCondSql } from "./tracking-replacement-pair";
 
 export type PoClosedFilter = "open" | "closed" | "all";
 export type PoRefundsFilter = "any" | "due" | "none";
@@ -62,11 +61,17 @@ function actionItemCond(item: string, p: Params): string | null {
   if (item === RECEIVING_MISMATCH) any.push(RECEIVING_MISMATCH_EXISTS_SQL);
   if (item === EXTRA_UNITS_SHIPPED) any.push(EXTRA_UNITS_EXISTS_SQL);
   if (item === NO_INVOICE_SAVED) any.push(NO_INVOICE_EXISTS_SQL("p"));
-  const pair = replacementTrackingCondSql("p", item); // the one-off replacement pair's item — until 2026-11-06 the filter ignored it
+  const pair = null as string | null; // (the one-off replacement pair's item is gone — claims commit 8, 2026-11-14: no one-off chips, ever)
+  // (kept the shape of the line that follows: until 2026-11-06 the filter ignored it
   if (pair) any.push(pair);
   return any.length ? `(${any.join(" OR ")})` : null;
 }
 
+/** Claims commit 8 (§3.13 place 9): "number|kind" of the first other number the search matched — the list row's "matched: replacement order R…"; NULL without a search. */
+export function searchOtherSql(search: string | null | undefined, p: { $: (v: unknown) => string }): string {
+  if (!search) return "NULL";
+  return `(SELECT n.number || '|' || n.kind FROM po_other_numbers n WHERE n.po_id = p.id AND n.number ILIKE ${p.$(`%${search}%`)} ORDER BY n.id LIMIT 1)`;
+}
 function closedCond(c: PoClosedFilter): string | null {
   return c === "open" ? `p.closed_at IS NULL` : c === "closed" ? `p.closed_at IS NOT NULL` : null;
 }

@@ -23,6 +23,9 @@ function fakeQuery(state: { rows?: Array<{ id: string; asin: string }>; sharing?
     if (s.startsWith("SELECT id, asin FROM po_asins WHERE po_id")) return { rows: state.rows ?? [{ id: "00000000-0000-4000-8000-000000000001", asin: "B092LFJCMX" }], rowCount: 1 };
     if (s.startsWith("SELECT id, supplier, order_id FROM purchase_orders WHERE id <> $1")) return { rows: state.sharing ?? [], rowCount: 0 };
     if (s.startsWith("SELECT alt_order_ids FROM purchase_orders")) return { rows: [{ alt_order_ids: state.alt ?? null }], rowCount: 1 };
+    // the other numbers (claims commit 8): the PO, no row for the number yet, the insert's row back
+    if (s.startsWith("SELECT id, order_id FROM purchase_orders WHERE id = $1")) return { rows: [{ id: PO, order_id: "SPIN-1744653" }], rowCount: 1 };
+    if (s.startsWith("INSERT INTO po_other_numbers")) { writes.push({ sql: s, params }); return { rows: [{ id: 1, po_id: PO, number: params?.[1], kind: params?.[2], note: params?.[3], claim_id: null, created_at: new Date("2026-11-14T12:00:00Z") }], rowCount: 1 }; }
     // linkVelocityOrder's reads
     if (s.startsWith("SELECT pa.id, pa.po_id, pa.asin, p.order_id, p.supplier FROM po_asins pa")) return { rows: [{ id: params?.[0], po_id: PO, asin: "B092LFJCMX", order_id: "SPIN-1744653", supplier: "yarnspirations.com" }], rowCount: 1 };
     if (s.startsWith("SELECT l.po_asin_id, pa.po_id, p.order_id, p.supplier FROM velocity_order_links")) return { rows: state.linkRow ? [state.linkRow] : [], rowCount: 0 };
@@ -43,14 +46,18 @@ describe("order # renamed after upload → the Velocity order follows", () => {
     expect(puts).toEqual([["v-1", renamePutBody(order({}), "SPIN-1744653")]]);
     expect(puts[0][1]).toMatchObject({ orderNumber: "SPIN-1744653", date: "11/07/2026", asin: "B092LFJCMX", amazonSKU: "RED-ART", sold_as: "multi-pack", units_per_pack: 2, quantity: 22, trackingNumbers: [{ tracking_number: "384673105692", carrier: "FedEx", tracking_status: null }] });
     expect(r.renamed).toEqual([{ id: "#9986", orderId: "v-1", asin: "B092LFJCMX" }]);
-    expect(r.warning).toBe("Velocity order #9986 renamed to SPIN-1744653 · X7W12GQQ5 kept as an alternate order #");
+    // claims commit 8: the old number is kept as the PO's labeled "previous number", dated; alt_order_ids re-derives from the table
+    expect(r.warning).toBe("Velocity order #9986 renamed to SPIN-1744653 · X7W12GQQ5 kept as the previous number");
     expect(h.writes.map((w) => w.sql.replace(/ \(.*$/, ""))).toEqual([
       "INSERT INTO po_edit_log", // velocity_order_number
-      "UPDATE purchase_orders SET alt_order_ids = $2, updated_at = NOW() WHERE id = $1",
-      "INSERT INTO po_edit_log", // alt_order_ids
+      "INSERT INTO po_other_numbers",
+      "UPDATE purchase_orders SET alt_order_ids = NULLIF((SELECT string_agg(n.number, ', ' ORDER BY n.id) FROM po_other_numbers n WHERE n.po_id = $1), ''), updated_at = NOW() WHERE id = $1",
+      "INSERT INTO po_edit_log", // Other number added
     ]);
     expect(h.writes[0].params).toEqual([PO, 1, "shipment", "00000000-0000-4000-8000-000000000001", "velocity_order_number", "#9986 X7W12GQQ5", "#9986 SPIN-1744653"]);
-    expect(h.writes[1].params).toEqual([PO, "X7W12GQQ5"]);
+    expect(h.writes[1].params?.slice(0, 3)).toEqual([PO, "X7W12GQQ5", "previous_number"]);
+    expect(h.writes[1].params?.[3]).toMatch(/^renamed \d+\/\d+\/\d{4}$/);
+    expect(h.writes[3].params?.slice(4, 5)).toEqual(["Other number added"]);
   });
 
   it("a shipped order is linked, never PUT; the warning says so", async () => {
@@ -59,7 +66,7 @@ describe("order # renamed after upload → the Velocity order follows", () => {
     const r = await rename(h.query, { fetchKnown: async () => [order({ status: "shipped", lifecycleSource: "shipment" })], update });
     expect(update).not.toHaveBeenCalled();
     expect(r.linked).toEqual([{ id: "#9986", orderId: "v-1", asin: "B092LFJCMX", status: "shipped" }]);
-    expect(r.warning).toBe("linked to Velocity order #9986 (already shipped) · X7W12GQQ5 kept as an alternate order #");
+    expect(r.warning).toBe("linked to Velocity order #9986 (already shipped) · X7W12GQQ5 kept as the previous number");
     const link = h.writes.find((w) => w.sql.startsWith("INSERT INTO velocity_order_links"));
     expect(link?.params?.slice(0, 2)).toEqual(["v-1", "00000000-0000-4000-8000-000000000001"]);
     expect(link?.params?.[7]).toBe("manual");
@@ -70,7 +77,7 @@ describe("order # renamed after upload → the Velocity order follows", () => {
     const r = await rename(h.query, { fetchKnown: async () => [order({})], update: async () => { throw new Error("502 from Velocity"); } });
     expect(r.failed).toEqual([{ id: "#9986", orderId: "v-1", asin: "B092LFJCMX", error: "502 from Velocity" }]);
     expect(r.linked).toHaveLength(1);
-    expect(r.warning).toBe("linked to Velocity order #9986 (rename failed) · X7W12GQQ5 kept as an alternate order #");
+    expect(r.warning).toBe("linked to Velocity order #9986 (rename failed) · X7W12GQQ5 kept as the previous number");
   });
 
   it("the guard: another AF PO carries the old number (now or as an alternate) → nothing renamed, linked or kept", async () => {

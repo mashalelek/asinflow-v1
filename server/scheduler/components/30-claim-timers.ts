@@ -11,6 +11,7 @@
 // cancellation emails of the last hours (cancellation-emails.ts, Gmail; the AI fallback for free text). Suggested
 // only: nothing changes a PO until Maria opens one.
 import { sweepClaimTimers } from "../../claim-buckets";
+import { sweepReplacements } from "../../claim-replacements";
 import { sweepSuggestions } from "../../claim-suggestions";
 import { ingestCancellations } from "../../cancellation-emails";
 import { gmailClient } from "../../gmail-client";
@@ -19,7 +20,7 @@ import { driveClient } from "../../drive-client";
 import type { ComponentDef, ComponentContext, ComponentResult } from "../types";
 
 /** Test seam. */
-export const claimTimerDeps = { sweep: sweepClaimTimers, suggest: sweepSuggestions, cancellations: ingestCancellations, gmail: gmailClient, emails: ingestClaimEmails, drive: driveClient };
+export const claimTimerDeps = { sweep: sweepClaimTimers, replacements: sweepReplacements, suggest: sweepSuggestions, cancellations: ingestCancellations, gmail: gmailClient, emails: ingestClaimEmails, drive: driveClient };
 
 export const claimTimers: ComponentDef = {
   n: 30, key: "30_claim_timers", name: "Claim timers", tier: "hourly", kind: "account",
@@ -31,6 +32,12 @@ export const claimTimers: ComponentDef = {
     const outcomes: Record<string, string> = {};
     for (const c of created) { counts[c.kind] = (counts[c.kind] ?? 0) + 1; outcomes[`claim ${c.claim_id}`] = `${c.kind}: ${c.reason}`; }
     if (created.length) ctx.log(`claim timers: ${created.length} task${created.length === 1 ? "" : "s"} created (${counts.follow_up_supplier} follow up, ${counts.check_on_it} check on it)`);
+    // Replacements (commit 8, §3.13 rows 3–6): tie the PO's new tracking to the claim, propose a reship under a new order #, close on Velocity's count, note a home delivery.
+    try {
+      const rp = await claimTimerDeps.replacements(ctx.query, now, null);
+      counts.replacement_tracking_tied = rp.tied; counts.reship_suggested = rp.suggested; counts.replacement_arrived = rp.arrived; counts.replacement_delivered = rp.delivered;
+      for (const x of rp.rows) outcomes[`replacement claim ${x.claim_id}`] = x.what.slice(0, 200);
+    } catch (e: any) { outcomes._replacements = `error: ${e?.message ?? e}`; counts.replacement_errors = 1; }
     // Auto-found claims (commit 5): suggestions only.
     const s = await claimTimerDeps.suggest(ctx.query, now);
     counts.suggested = s.created;

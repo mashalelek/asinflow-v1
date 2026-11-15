@@ -9,13 +9,11 @@ import { join } from "node:path";
 // numbers, each with its reason — a new entry needs one too.
 const QTY = /\b(qty|qty_ordered|qty_received|qty_shipped_supplier|qty_at_prep|qty_at_warehouse|qty_lost_damaged_us|qty_shipped_fba|qty_received_amazon|received_velocity|unreimbursed_loss_qty)\b/;
 const ALLOWED_DIRECT_READS: Record<string, string> = {
-  "extra-units.ts": "Extra units shipped: compares the row's shipped and ordered in the same stored basis, writes the cleared snapshot",
   "po-edit.ts": "the writers: recomputeAsinQty / fillAsinPackGaps / linesAtPack read stored values and convert them with productUnitsOf / storedQtyForAsinRow",
   "po-guards.ts": "Σ qty_at_prep for the delete message, labelled Individual units",
   "shipment-link.ts": "the overshoot guard compares units shipped with the row's stored ordered in the same basis",
   "shipment-sync-velocity.ts": "the writer of qty_at_prep / received_velocity / the shipment rows; capacityUnits reads qty with its basis",
   "tracking-match.ts": "fully shipped = Σ shipped by supplier ≥ Σ ordered, both stored in the same basis",
-  "tracking-replacement-pair.ts": "received by Velocity ≥ ordered, both stored in the same basis",
 };
 const ALLOWED_PACK_ARITHMETIC: Record<string, string> = {
   "po-expected.ts": "the one place the conversions live",

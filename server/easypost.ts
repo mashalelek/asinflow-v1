@@ -23,6 +23,7 @@ import { Router, type Request, type Response } from "express";
 import type { QueryLike } from "./scheduler/types";
 import { EASYPOST_STATUSES, type EasypostStatus } from "@shared/carrier-status";
 import { applyReturnTracker } from "./claim-returns";
+import { applyReplacementTracker } from "./claim-replacements";
 
 const BASE_URL = "https://api.easypost.com/v2";
 /** The sweep stops this long after registration (§3.9; Maria 2026-11-12: the rule is open POs, not shipment age). */
@@ -152,7 +153,7 @@ export async function applyCarrierUpdate(query: QueryLike, u: CarrierUpdate, tra
     [u.easypost_tracker_id, u.carrier_status, u.est_delivery_at, u.last_scan_at, u.delivered_at, u.tracking_code],
   );
   let n = r.rowCount ?? 0;
-  if (tracker) n += (await applyReturnTracker(query, tracker)).rows;
+  if (tracker) { n += (await applyReturnTracker(query, tracker)).rows; await applyReplacementTracker(query, tracker); }
   return n;
 }
 

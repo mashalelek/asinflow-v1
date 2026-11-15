@@ -79,8 +79,6 @@ export const RENAMED_DERIVED_ITEMS: Readonly<Record<string, string>> = { "Receiv
  * Blocks auto-close.
  */
 export const EXTRA_UNITS_SHIPPED = "Extra units shipped";
-// The one-off replacement pair's item (server/tracking-replacement-pair.ts, 2026-11-05): derived, never set by hand.
-export const REPLACEMENT_TRACKING_ITEM = "Tracking also goes to 200015557295492 (1 replacement single)";
 /**
  * No invoice saved (Maria 2026-11-05): a PO with no po_documents row from
  * the day after its order date — open POs, and AF-created POs whatever their
@@ -89,7 +87,9 @@ export const REPLACEMENT_TRACKING_ITEM = "Tracking also goes to 200015557295492 
  * settings docs.save_failures). Display only: it does not block auto-close.
  */
 export const NO_INVOICE_SAVED = "No invoice saved";
-export const AUTO_ACTION_ITEMS = [EXTRA_UNITS_SHIPPED, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, REPLACEMENT_TRACKING_ITEM, NO_INVOICE_SAVED] as const;
+export const AUTO_ACTION_ITEMS = [EXTRA_UNITS_SHIPPED, REVIEW_VELOCITY, PACK_SIZE_MISSING, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, NO_INVOICE_SAVED] as const;
+/** The four warnings a note can dismiss (claims commit 8, §3.13 rows 10–13); No invoice saved and Pack size missing are things to fix, never explained away. */
+export const DISMISSABLE_WARNINGS: readonly string[] = [EXTRA_UNITS_SHIPPED, PACK_SIZE_MISMATCH, RECEIVING_MISMATCH, REVIEW_VELOCITY];
 export const DISPLAY_ACTION_ITEMS: readonly string[] = [...ACTION_ITEMS, ...AUTO_ACTION_ITEMS];
 
 export function isActionItem(s: string): s is ActionItem {

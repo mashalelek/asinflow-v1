@@ -18,6 +18,15 @@ units wording), run first.*
 
 ## 0. Change log
 
+**2026-11-14 (Maria) — commit 8, replacements + dismiss with note
+(§3.13):** acceptance tables and mockups approved. A reship never gets a
+PO and never changes Velocity's order: its tracking goes on the ORIGINAL
+Velocity order, its order # is kept on the original PO as an other number
+labeled with why it is there (replacement order, previous number, invoice #,
+confirmation #), shown on PO Details. Home replacements get Arrived / Short. Four
+warnings can be dismissed with a required note. **No one-off chips, ever**
+(Maria): a one-off fact goes in the PO's Notes when nothing else fits.
+
 **2026-11-13 (Maria) — commit 7, returns (§3.12):** acceptance table and
 mockups approved. The return's own tracking ticks Shipped and Delivered
 (replaces the temporary auto-tick); a Return card on the claim; "Copy
@@ -652,6 +661,128 @@ Rules:
    return-by date already past). The Velocity push now reads inbound rows
    only. Render needs nothing new.
 
+### 3.13 Replacements and dismiss with note (commit 8; Maria 2026-11-14)
+
+**The mockups are the UI:** `docs/mockups/claims-list-replacements-2026-11-14.html`,
+`docs/mockups/claim-detail-replacements-2026-11-14.html` (the two approved
+Claims pages, same stylesheet; new: the Replacement card and the
+replacement rows) and `docs/mockups/po-warning-dismiss-2026-11-14.html`
+(the PO page: wording and placement only — it reuses the existing
+"clear…" popover and the PO page's own styles, which stay as they are).
+`docs/mockups/replacement-order-number-2026-11-14.html` shows every place
+a replacement order # appears, on one example (wording and placement; its
+PO-page parts are an approximation of the PO look, which stays as it is).
+
+**Replacements** (approved; the test):
+
+| # | What happens | AF does by itself | Maria sees | Maria does |
+|---|---|---|---|---|
+| 1 | Outcome becomes replacement, Velocity PO | Units stay expected (§3.6) | **Needs attention › Velocity**: "Replacement promised M/D · tell Velocity N more are coming on order <original #>" + **copy message** | Discord, **Told Velocity** |
+| 2 | Same, home PO | Same | No Velocity task; Waiting on supplier until it ships | Nothing |
+| 3 | Ships under the SAME order # | Tracking that arrives on the PO after the claim was opened is tied to the claim (`po_tracking.claim_id`), ticks Shipped, pushes to the original Velocity order as today | Waiting on shipment: "Replacement shipped M/D · UPS in transit · due M/D · from tracking" | Nothing |
+| 4 | Ships under a NEW order # (Michaels R…, Walmart) | A shipping / replacement email from that supplier with an order # AF doesn't know and the claim's items → `confirm_reship_order` | **Needs attention › Supplier**: "Shipping email M/D for order <new #> · <items> · looks like the reship · open email" | **It's the reship** (the # joins `alt_order_ids`; the tracking attaches to the claim and is pushed to the ORIGINAL Velocity order) or **It's not** (never proposed for this claim again) |
+| 5 | Arrives at Velocity | Velocity's received count on the line covers what was ordered → Arrived → Closed | Closed: "Replacement arrived M/D · Velocity received N of N" | Nothing |
+| 6 | Delivered, home PO | `replacement_arrived` opens at the carrier's delivered scan | **Money and arrivals**: "Replacement delivered M/D · from tracking · did all N arrive?" | **Arrived** (closes) or **Short** (opens the claim to set what is still missing; the rest stays open) |
+| 7 | Stalls: promised and no shipping email / tracking in 5 business days; no scan in 5; exception; delivered and Velocity still short after 3 business days (D8) | `check_on_it` with the reason | **Timed out** row naming it | Check on it / Snooze |
+| 8 | Never comes; outcome changed to refund / credit / write-off | Units leave expected then; $ owed again; replacement steps and card go | The refund path | Set outcome |
+| 9 | The one-off chip "Tracking also goes to 200015557295492 (1 replacement single)" (server/tracking-replacement-pair.ts) | Removed; the claim's own tracking link carries it | Chip gone | Nothing |
+
+Rules:
+- **Velocity's order is never altered for a replacement** (Maria
+  2026-11-14): no new Velocity order, no order # change, no qty change.
+  Maria tells Velocity on Discord; the reship's tracking — same order # or
+  a new one — is pushed to the ORIGINAL Velocity order. The Upload to
+  Velocity plan never offers a reship as a new order (it already matches a
+  PO's alternate numbers, a659fbb).
+- **How a reship is linked:** there is no replacement PO (D10). The PO's
+  own order # never changes and stays the Order ID. Every other number
+  kept on the PO (`alt_order_ids`) carries a **label saying why it is
+  there** (Maria 2026-11-14), never a bare "alternate":
+  - **replacement order** — a reship's own order #, with its claim link;
+  - **previous number** — what the PO was called before a rename, with
+    the date;
+  - **invoice #**, **confirmation #** — another number for the very same
+    order;
+  - **other** — with a short note.
+  A number added by "It's the reship" is labeled replacement order by
+  itself; a rename labels the old number previous number; a number Maria
+  adds by hand asks for the label. Existing numbers with no known reason
+  are listed in the step 1 report for Maria to label — never guessed.
+  **Everywhere a replacement order # shows** (the mockup's nine places):
+  (1) the Claims list row before confirming ("Shipping email M/D for order
+  R… · looks like the reship"); (2) the row after ("Replacement shipped
+  M/D on order R… · UPS in transit"); (3) the claim's Replacement card
+  ("Order # R… · replacement order on this PO"); (4) the claim's timeline
+  ("Reship confirmed · Order R… kept on the PO as replacement order ·
+  tracking … tied to this claim") and Linked › Emails; (5) the Copy
+  message for Velocity text; (6) PO Details › Order card ("Other numbers:
+  R… · replacement order · claim #N"); (7) PO History ("Other number
+  added: R… · replacement order · claim #N"); (8) the PO's Tracking tab —
+  each row shows the order # its email carried, and a reship's row adds
+  "· replacement order · claim #N"; (9) search on POs and Claims finds the
+  original PO and says "matched: replacement order R…". It never appears
+  as the Order ID, in the POs list columns, on Velocity's order, or in
+  Upload to Velocity.
+- **The Replacement card** (detail, left column, between Steps and Linked;
+  shown while the outcome is replacement): Ships to, Units (Individual),
+  Order #, Tracking, Carrier status, Velocity's received count; **Copy
+  message for Velocity** ("A replacement for N units of <product> (<ASIN>)
+  from order <original #> is on its way, <carrier> <tracking #>. The box
+  may show order # <replacement #>. Please receive it on order
+  <original #>." — the middle sentence only when the reship has its own
+  number). AF sends nothing.
+- Steps on a replacement path: Supplier answers · replacement → Told
+  Velocity (Velocity POs) → Shipped → Arrived; hand-set dates win, as §3.12.
+- **No one-off chips** (Maria 2026-11-14): AF never adds an Action Items
+  chip for a single PO or case. A one-off fact goes in the PO's Notes when
+  nothing else fits. In CLAUDE.md.
+
+**Dismiss a warning with a note** (§3.8; approved; the test):
+
+| # | What happens | Maria sees | Maria does |
+|---|---|---|---|
+| 10 | A PO shows Extra units shipped, Pack size mismatch, FBA receiving mismatch or Review Velocity | "dismiss…" under the chip (ASIN row; today's "clear…" popover: the numbers + a required note) | Types why it is OK, **Dismiss with note** |
+| 11 | After | The chip leaves the PO and the POs list; PO Details › Notes gains "Dismissed warnings": chip name, ASIN, the numbers, the note, who, when, **undo** | Nothing |
+| 12 | The numbers change later | The warning is back; the old line stays as history | Dismiss again or fix it |
+| 13 | Auto-close | A dismissed warning never blocks it; a PO with units still unshipped stays open and is closed by hand, as today | — |
+
+- Stored in `po_warning_dismissals` (§4.5: PO, warning type, the
+  quantities at dismissal, note). The existing Extra-units clear notes
+  (migration 073) convert to dismissals, wording "clear…" → "dismiss…".
+- Not dismissable: No invoice saved, Pack size missing (things to fix,
+  not explain).
+
+   **Built 2026-11-14 (commit 8; migration 114).** Step 1 (read-only,
+   production): NO open claim has outcome replacement (#3172 voltagesupply
+   65705 carries a Confirm outcome task suggesting one — nothing changes until
+   Maria confirms; then row 1 applies). Two POs carry other numbers, both
+   labeled "other" until Maria labels them (the data says no reason):
+   theadventurechallenge.com 18936582013059 → 3029684 (the PO note reads
+   "Shipped as order #3029684 (2026-10-12) — DHL …") and pyramydair.com
+   "115449859 / 115450009" → 115450009 (the second half of its own order id).
+   The four warnings on the 231 open POs: Extra units shipped 2, Pack size
+   mismatch 2, FBA receiving mismatch 60, Review Velocity 4. Extra-units clear
+   notes to convert: 0. The one-off chip was not showing on either pair PO and
+   neither would auto-close without it (both still short of shipped). Built
+   as the tables say: `server/claim-replacements.ts` (rows 3–6 in the hourly
+   sweep and on the Claims page load; `applyReplacementTracker` on every
+   EasyPost write), `server/po-other-numbers.ts` (the labeled numbers, the
+   derived `alt_order_ids`, the History wording), `server/po-warning-dismiss.ts`
+   + `DISMISSAL_QUANTITIES_SQL` in `po-action-items.ts`; the Replacement card,
+   the rows and the Short form in `client/src/pages/claims.tsx`; the Order
+   card's "Other numbers", the Notes card's "Dismissed warnings", the list's
+   "matched: …" hint and the generalized "dismiss…" popover on the PO page.
+   Interpretations noted: Short keeps the claim open with a Contact supplier
+   task "replacement short: N of M arrived · K still missing"; a reship is
+   proposed from the unmatched shipping emails the tracking ingest already
+   parks (the sender resolves to the claim's supplier, shipped after the
+   promise, the items name the product — or the supplier has one open
+   replacement and the email lists no items); the Edit PO form's free-text
+   "Alternate order #s" field is gone (numbers are added with a label on the
+   Order card; one typed through the API lands as "other" with a note to
+   label it). Nothing on production changes bucket or open / closed state on
+   deploy.
+
 ## 4. Data
 
 Verified against migrations 028–099. Stored base for every quantity: Individual units (D17).
@@ -986,7 +1117,7 @@ Prerequisite: `claude_spec-patch-quantity-names.md` (labels only).
    live waits for Maria.**
 7. Returns (§3.12, acceptance table + mockups approved 2026-11-13): label → document + return tracking + Velocity / shipment
    buckets.
-8. Replacements (`alt_order_ids`, tracking ↔ claim) + §3.8
+8. Replacements + dismiss with note (§3.13, acceptance tables + mockups approved 2026-11-14) (`alt_order_ids`, tracking ↔ claim) + §3.8
    dismiss-with-note.
 9. Supplier write-offs line; SPEC §22 / §26 / §11, CLAUDE.md; mark the
    cancellations patch's §3 / §5 / §6 superseded.

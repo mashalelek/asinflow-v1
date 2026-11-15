@@ -10,7 +10,14 @@ import { lineRatio, ratioYield } from "../../shared/yield";
 import type { SheetRow } from "../google-sheets";
 import { NEWEST_PO_ORDER } from "../po-entry-seq";
 import { openLineItemsSql, EXTRA_UNITS_EXISTS_SQL, PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL } from "../po-action-items";
-import { replacementTrackingItemsSql } from "../tracking-replacement-pair";
+// The one-off replacement pair's item as the pre-101 close set carried it (server/tracking-replacement-pair.ts, removed by
+// claims commit 8, 2026-11-14): frozen here verbatim so this file still computes the OLD verdict.
+const replacementTrackingItemsSql = (poAlias: string) =>
+  `UNION SELECT 'Tracking also goes to 200015557295492 (1 replacement single)' WHERE EXISTS (SELECT 1 FROM purchase_orders rp WHERE rp.id = ${poAlias} AND rp.order_id = '200015663718988')
+       AND NOT EXISTS (SELECT 1 FROM po_edit_log re WHERE re.po_id = ${poAlias} AND re.field = 'tracking also added to 200015557295492')
+       AND NOT EXISTS (SELECT 1 FROM purchase_orders tp WHERE tp.order_id = '200015557295492'
+       AND EXISTS (SELECT 1 FROM po_asins ta WHERE ta.po_id = tp.id AND ta.qty > 0)
+       AND NOT EXISTS (SELECT 1 FROM po_asins ta WHERE ta.po_id = tp.id AND ta.qty > 0 AND COALESCE(ta.received_velocity, 0) < ta.qty))`;
 import { EXTRA_UNITS_SHIPPED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING } from "../po-status-map";
 import { trueYield, lineAsinQty } from "../po-af-source";
 

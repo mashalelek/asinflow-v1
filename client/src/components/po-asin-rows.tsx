@@ -242,8 +242,6 @@ export function actionChipClass(item: string): string {
 export const chipBase = "inline-block rounded-sm px-1.5 py-0.5 text-[11px] whitespace-nowrap";
 /** Shown (never editable): the auto-managed "Review Velocity" (SPEC §26) and the pack-size items (derived from the ASIN row) after the manual items. */
 export const DISPLAY_ACTION_ITEMS = [...ACTION_ITEM_OPTIONS, EXTRA_UNITS_SHIPPED, "Review Velocity", "Pack size missing", "Pack size mismatch", FBA_RECEIVING_MISMATCH,
-  // One-off (2026-11-05, server/tracking-replacement-pair.ts): derived, resolves when the tracking is added.
-  "Tracking also goes to 200015557295492 (1 replacement single)",
   // A PO with no document from the day after its order date (2026-11-05); the hover names the reason.
   "No invoice saved"];
 const ordered = (items: readonly string[] | undefined) => DISPLAY_ACTION_ITEMS.filter((o) => (items ?? []).includes(o));
@@ -371,26 +369,43 @@ export function poActionTitles(titles: Readonly<Record<string, string>> | undefi
 }
 const lineTitles = (l: PoAsinLine): Record<string, string> | undefined => l.pack_mismatch_note ? { [PACK_SIZE_MISMATCH]: l.pack_mismatch_note } : undefined;
 
-/** Clear "Extra units shipped" by hand — the note is required (stored on the row, logged in History). */
-function ClearExtraUnits({ a, onChanged }: { a: PoAsinRowData; onChanged?: () => void }) {
+/** The four warnings a note can dismiss (claims commit 8, §3.13 rows 10–13; docs/mockups/po-warning-dismiss-2026-11-14.html): the ASIN-row ones and Review Velocity (the PO's). */
+export const DISMISSABLE_WARNINGS: readonly string[] = [EXTRA_UNITS_SHIPPED, "Pack size mismatch", FBA_RECEIVING_MISMATCH, "Review Velocity"];
+/** What the dismiss popover shows above the note: the numbers the warning stands on. */
+export function dismissWarningText(warning: string, a: Pick<PoAsinRowData, "qty" | "qty_shipped_fba" | "qty_received_amazon" | "extra_units_note" | "pack_mismatch_note" | "units_per_pack"> & { velocity_units_per_pack?: number | string | null }): string {
+  if (warning === EXTRA_UNITS_SHIPPED) return `Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)} of ${fmtQty(a.qty)} ordered, in ASIN units`;
+  if (warning === FBA_RECEIVING_MISMATCH) return `Received by Amazon ${fmtQty(a.qty_received_amazon ?? 0)} ≠ Shipped FBA ${fmtQty(a.qty_shipped_fba ?? 0)}, in ASIN units`;
+  if (warning === "Pack size mismatch") return a.pack_mismatch_note ?? `Velocity's pack ${a.velocity_units_per_pack ?? "—"} vs AF's ${a.units_per_pack ?? "—"} Individual units per ASIN unit`;
+  return "Review Velocity: the PO's open review reasons";
+}
+/**
+ * Dismiss a warning with a note (the pre-114 "clear…" on Extra units shipped, now under Pack size mismatch, FBA receiving mismatch
+ * and Review Velocity too): the numbers at this moment are kept with the note; the chip leaves the PO and the POs list, comes
+ * back when the numbers change, never blocks auto-close; PO Details › Notes lists it with undo.
+ */
+function DismissWarning({ a, warning, onChanged }: { a: PoAsinRowData; warning: string; onChanged?: () => void }) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const save = async () => {
     setErr(null);
-    try { await patchJson(`/api/pos/asin-rows/${a.id}/extra-units/clear`, "POST", { note }); setOpen(false); setNote(""); onChanged?.(); }
-    catch (e: any) { setErr(e.message); }
+    try {
+      await patchJson(warning === "Review Velocity" ? `/api/pos/${a.po_id}/warnings/dismiss` : `/api/pos/asin-rows/${a.id}/warnings/dismiss`, "POST", { warning, note });
+      setOpen(false); setNote(""); onChanged?.();
+    } catch (e: any) { setErr(e.message); }
   };
+  const slug = warning.toLowerCase().replace(/[^a-z]+/g, "-");
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" onClick={(e) => e.stopPropagation()} className="mt-0.5 block text-[10px] text-muted-foreground hover:text-foreground" data-testid={`button-clear-extra-units-${a.asin}`}>clear…</button>
+        <button type="button" onClick={(e) => e.stopPropagation()} className="mt-0.5 block text-[10px] text-muted-foreground hover:text-foreground" title={`Dismiss ${warning} with a note`} data-testid={`button-dismiss-${slug}-${a.asin}`}>dismiss…</button>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-2 space-y-1 text-xs" align="end" onClick={(e) => e.stopPropagation()}>
-        <div>{extraUnitsTitle(a)}</div>
-        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why the extra ASIN units shipped are OK (required)" rows={3}
-          className="w-full rounded border border-input bg-background p-1 text-xs" data-testid={`input-clear-extra-units-${a.asin}`} />
-        <button type="button" disabled={!note.trim()} onClick={() => void save()} className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50" data-testid={`button-confirm-clear-extra-units-${a.asin}`}>Clear with note</button>
+        <div>{dismissWarningText(warning, a)}</div>
+        <label className="block text-[11px] text-muted-foreground" htmlFor={`dismiss-note-${slug}-${a.id}`}>Why this is OK (required)</label>
+        <textarea id={`dismiss-note-${slug}-${a.id}`} value={note} onChange={(e) => setNote(e.target.value)} rows={3}
+          className="w-full rounded border border-input bg-background p-1 text-xs" data-testid={`input-dismiss-${slug}-${a.asin}`} />
+        <button type="button" disabled={!note.trim()} onClick={() => void save()} className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50" data-testid={`button-confirm-dismiss-${slug}-${a.asin}`}>Dismiss with note</button>
         {err && <div className="text-destructive">{err}</div>}
       </PopoverContent>
     </Popover>
@@ -708,7 +723,7 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         <td className="px-1.5 py-1.5">{editable && lines.length > 0
           ? <ActionItemsEditor items={a.action_items} titles={extraTitles(a)} url={`/api/pos/asin-rows/${a.id}/action-items`} onSaved={onChanged} testId={`button-action-items-asin-${a.asin}`} lineCount={lines.length} />
           : <ActionItemChips items={a.action_items} titles={extraTitles(a)} />}
-          {editable && (a.action_items ?? []).includes(EXTRA_UNITS_SHIPPED) && <ClearExtraUnits a={a} onChanged={onChanged} />}</td>
+          {editable && DISMISSABLE_WARNINGS.filter((w) => (a.action_items ?? []).includes(w)).map((w) => <DismissWarning key={w} a={a} warning={w} onChanged={onChanged} />)}</td>
         {/* ASIN-row note, inline (2026-11-04); read-only tables show the icon with the note on hover. */}
         <td className={editable ? "p-0" : "px-2 py-1.5"}>{editable
           ? <InlineNoteCell value={a.notes} label="ASIN note" className="px-2 py-1.5" testId={`asin-${a.id}`} onSave={saveAsin("notes")} />
