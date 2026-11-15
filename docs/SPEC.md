@@ -6157,7 +6157,7 @@ revival.
 `po_cashback_sites` (5), `po_emails` (2), `po_purchasers` (1); maps:
 `po_payment_method_aliases` (alias → canonical) and
 `po_payment_method_last4` (canonical → last 4, migration 081). **A new card
-is added the same way (Wells Fargo (0875), Maria 2026-11-15, migration 115):**
+is added the same way (Wells Fargo (0875) and CapitalOne (6830), Maria 2026-11-15, migrations 115 / 117):**
 one migration appends the canonical name to `po_payment_methods`, its last 4
 to `po_payment_method_last4` and the bare name as an alias, and relinks the
 payments typed by hand before it existed (one History row each) — there is

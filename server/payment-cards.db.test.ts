@@ -23,6 +23,29 @@ async function lists(q: Q): Promise<PaymentLists> {
   return { methods: v("po_payment_methods") ?? [], aliases: v("po_payment_method_aliases") ?? {}, last4: v("po_payment_method_last4") ?? {} };
 }
 
+describe("CapitalOne (6830) is a card like every other (migration 117)", () => {
+  it("the list, the last-4 map and both aliases carry it; 'CapitalOne', 'Capital One', 'capital one' and a bare 6830 resolve to it; the migration relinks a hand-typed 'CapitalOne' row with a History row and runs twice without a second row", async (ctx) => {
+    if (!client) return ctx.skip();
+    const q: Q = (s, p) => client!.query(s, p);
+    const l = await lists(q);
+    expect(l.methods).toContain("CapitalOne (6830)");
+    expect(l.last4!["CapitalOne (6830)"]).toBe("6830");
+    for (const typed of ["CapitalOne", "Capital One", "capital one"]) expect(resolvePaymentNickname(typed, "", l)).toEqual({ nickname: "CapitalOne (6830)", ambiguous: [] });
+    expect(resolvePaymentNickname("", "6830", l)).toEqual({ nickname: "CapitalOne (6830)", ambiguous: [] });
+    const sql = readFileSync(join(__dirname, "..", "database", "migrations", "117_capitalone_card.sql"), "utf8");
+    await q("BEGIN");
+    try {
+      const po = (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier, subtotal, tax, sh_donations, discount, refund_amount, order_total, ships_to) VALUES ('zz-cap-6830', '2026-10-20', 'zz-test.com', 10, 0, 0, 0, 0, 10, 'velocity') RETURNING id`)).rows[0].id as string;
+      const id = Number((await q(`INSERT INTO po_payments (po_id, position, method, nickname, last4, amount) VALUES ($1, 0, 'card', 'CapitalOne', '6830', 10) RETURNING id`, [po])).rows[0].id);
+      await q(sql); await q(sql);
+      expect((await q(`SELECT nickname FROM po_payments WHERE id = $1`, [id])).rows[0].nickname).toBe("CapitalOne (6830)");
+      expect((await q(`SELECT field, old_value, new_value FROM po_edit_log WHERE po_id = $1`, [po])).rows).toEqual([{ field: "payment nickname (CapitalOne card added, migration 117)", old_value: "CapitalOne", new_value: "CapitalOne (6830)" }]);
+      expect((await lists(q)).methods.filter((m) => m === "CapitalOne (6830)")).toHaveLength(1);
+    } finally { await q("ROLLBACK"); }
+    expect((await q(`SELECT count(*)::int AS n FROM purchase_orders WHERE order_id = 'zz-cap-6830'`)).rows[0].n).toBe(0);
+  });
+});
+
 describe("Wells Fargo (0875) is a card like every other (migration 115)", () => {
   it("the picker's list, the last-4 map and the alias carry it; a typed 'Wells Fargo', a bare 0875 and a refund email's 'ending in 0875' all resolve to it", async (ctx) => {
     if (!client) return ctx.skip();
@@ -38,7 +61,8 @@ describe("Wells Fargo (0875) is a card like every other (migration 115)", () => 
     expect(resolvePaymentNickname("Visa", "0875", l)).toEqual({ nickname: "Wells Fargo (0875)", ambiguous: [] });
     // Refund / order emails: the card word names the card by its last 4; a last 4 AF has no card for stays "••NNNN"; two cards on one last 4 name neither.
     expect(refundCardWord("Your refund of $21.45 will go back to the card ending in 0875 within 5 days.", "refund_card", l)).toBe("card Wells Fargo (0875)");
-    expect(refundCardWord("Refunded to Visa ••6830", "refund_card", l)).toBe("card ••6830");
+    expect(refundCardWord("Refunded to Visa ••6830", "refund_card", l)).toBe("card CapitalOne (6830)"); // migration 117
+    expect(refundCardWord("Refunded to card ending in 4242", "refund_card", l)).toBe("card ••4242");
     expect(refundCardWord("Refunded to card ending in 1005", "refund_card", l)).toBe("card ••1005");
     expect(refundCardWord("A $5 gift card is on its way", "gift_card", l)).toBe("gift card");
     expect(refundCardWord("refund to card ending in 0875", "refund_card", null)).toBe("card ••0875");

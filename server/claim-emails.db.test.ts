@@ -64,7 +64,7 @@ describe("§3.11 rows, end to end (real schema, rolled back)", () => {
       const a = await applyEmailPlan(q, e, p);
       expect(a).toMatchObject({ row: 1, claim_id: id });
       const [c] = await loadClaims(q, { ids: [id] });
-      expect(c).toMatchObject({ status: "open", outcome: "refund_card", outcome_amount: 5.97, outcome_detail: "card ••6830 · from email", email_confirmed: true });
+      expect(c).toMatchObject({ status: "open", outcome: "refund_card", outcome_amount: 5.97, outcome_detail: "card CapitalOne (6830) · from email", email_confirmed: true });
       expect(c.supplier_confirmed_at?.slice(0, 10)).toBe("2026-11-12");
       expect(c.tasks.filter((t) => !t.done_at).map((t) => t.kind)).toContain("refund_received"); // (the report prompt is moot once the supplier confirmed — effectiveTasks)
       const r = await row(q, id);
