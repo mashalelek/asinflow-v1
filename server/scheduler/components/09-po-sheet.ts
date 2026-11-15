@@ -10,13 +10,14 @@ export const poSheet: ComponentDef = {
   n: 9, key: "09_po_sheet", name: "Actual COGS from AF POs", tier: "hourly", kind: "account",
   call: "AF PO tables",
   async run(ctx: ComponentContext): Promise<ComponentResult> {
-    const run = ctx.cache.get("syncAsinCostsFromPos") as ((filter?: ReadonlySet<string>) => Promise<{ updated: number; skipped: number; errors: string[]; cleared: number; clearedAsins: string[] }>) | undefined;
+    const run = ctx.cache.get("syncAsinCostsFromPos") as ((filter?: ReadonlySet<string>) => Promise<{ updated: number; skipped: number; errors: string[]; cleared: number; clearedAsins: string[]; notInAf: number }>) | undefined;
     if (!run) throw new Error("syncAsinCostsFromPos is not injected into the runner");
     const filter = ctx.job.scope_asins ? new Set(ctx.scopeAsins) : undefined;
     const r = await run(filter);
     const outcomes: Record<string, string> = {};
     for (const a of r.clearedAsins) outcomes[a] = "Actual COGS cleared (every PO row canceled)";
     for (const e of r.errors) outcomes[e.split(":")[0] || "_sheet"] = `error: ${e}`;
-    return { counts: { updated: r.updated, skipped: r.skipped, cleared: r.cleared, errors: r.errors.length }, outcomes };
+    // not_in_af (2026-11-14): PO'd ASINs with no asins row — nothing to write, not a failure (a row with no ASIN yet is not even read).
+    return { counts: { updated: r.updated, skipped: r.skipped, cleared: r.cleared, errors: r.errors.length, not_in_af: r.notInAf }, outcomes };
   },
 };

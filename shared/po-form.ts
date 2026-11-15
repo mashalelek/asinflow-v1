@@ -26,6 +26,7 @@
 import { bundleFromLines, bundleSplitMessage } from "./bundle";
 import { adjustedProductCost, allocateAsinCosts, bundleAsinCosts, allocationBaseOf, reflectedPromos, promoCostHeader, promoKind, COST_FORMULA_VERSION, REFLECTED_TOLERANCE, type CostHeader } from "./po-cost";
 import { asinUnitsFromLines, fracToNumber, lineRatio, lineUnitsExact, ratioForUnits, ratioYield, type YieldRatio, retailerUnitsAtPack } from "./yield";
+import { ASIN_SHAPE_MESSAGE, asinPlaceholderMessage, isAsinPlaceholder, isValidAsin } from "./asin";
 /** Stamped on purchase_orders.cost_formula_version by every form save; NULL = imported, never recomputed. */
 export const COST_FORMULA_VERSION_SAVED = COST_FORMULA_VERSION;
 
@@ -445,7 +446,9 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
     if (!/^\d+(\.\d{1,2})?$/.test(qty) || Number(qty) <= 0) perr(i, "Qty (Product units) must be more than 0 (at most 2 decimals)");
     const price = priceNum(p.price);
     if (price == null || Number.isNaN(price) || price < 0) perr(i, "price must be an amount ≥ 0 (at most 6 decimals)");
-    if (!/^[A-Z0-9]{10}$/.test(t(p.asin).toUpperCase())) perr(i, "map it to an ASIN (10 characters)");
+    // No ASIN yet (shared/asin.ts, 2026-11-14): placeholder text is named as such; anything else must be an ASIN.
+    if (isAsinPlaceholder(t(p.asin))) perr(i, asinPlaceholderMessage(t(p.asin)));
+    else if (!isValidAsin(t(p.asin).toUpperCase())) perr(i, `map it to an ASIN (${ASIN_SHAPE_MESSAGE})`);
     const y = t(p.asin_qty_per_product);
     if (!/^\d+(\.\d{1,4})?$/.test(y) || Number(y) <= 0) perr(i, "yield must be a number > 0");
     // "" = not known: allowed (saved as NULL → "Pack size missing"), warned per ASIN below.
@@ -538,7 +541,7 @@ export function checkPoForm(f: PoFormState): PoFormCheck {
 
   // Group by ASIN (first appearance order).
   const groups = new Map<string, number[]>();
-  products.forEach((p, i) => { const a = t(p.asin).toUpperCase(); if (/^[A-Z0-9]{10}$/.test(a)) { if (!groups.has(a)) groups.set(a, []); groups.get(a)!.push(i); } });
+  products.forEach((p, i) => { const a = t(p.asin).toUpperCase(); if (isValidAsin(a)) { if (!groups.has(a)) groups.set(a, []); groups.get(a)!.push(i); } });
   const asins: PoFormAsin[] = [];
   for (const [asin, idx] of Array.from(groups.entries())) {
     const first = products[idx[0]];

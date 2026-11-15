@@ -8,6 +8,7 @@
  * every later expanded PO's rows align with it.
  */
 import React, { useState } from "react";
+import { isValidAsin } from "@shared/asin";
 import { Link } from "wouter";
 import { ChevronRight, ChevronDown, AlertTriangle, Plus, X } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -683,7 +684,9 @@ export function PoAsinRow({ a, indent = false, editable = false, onChanged, po }
         {/* Product: ASIN · Amazon SKU over the title (2026-11-05); each truncates with its full text on hover. */}
         <td className="px-1.5 py-1.5 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
-            <Link href={`/asins?q=${a.asin}`} className="shrink-0 font-mono text-xs text-primary hover:underline" onClick={(e) => e.stopPropagation()}>{a.asin}</Link>
+            {isValidAsin(a.asin)
+              ? <Link href={`/asins?q=${a.asin}`} className="shrink-0 font-mono text-xs text-primary hover:underline" onClick={(e) => e.stopPropagation()}>{a.asin}</Link>
+              : <span className="shrink-0 text-xs text-amber-700 dark:text-amber-400" title={`"${a.asin}" is not an ASIN — this row came in without one. Edit the row to map it; until then nothing per-ASIN (COGS, On Order) reads it.`} data-testid={`no-asin-yet-${a.id}`}>No ASIN yet</span>}
             {a.sku ? <span className="truncate font-mono text-[11px] text-muted-foreground" title={a.sku}>{a.sku}</span> : (
               <Tooltip>
                 <TooltipTrigger asChild><AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" /></TooltipTrigger>

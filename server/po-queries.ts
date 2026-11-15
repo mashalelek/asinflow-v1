@@ -12,6 +12,8 @@
 // open_claims; po_line_expected does the same for a line (Product units).
 import type { QueryLike } from "./scheduler/types";
 import { ASIN_ACTION_ITEMS_SQL, unionActionItems } from "./po-action-items";
+import { CONFIRM_ORDER_DETAILS } from "./po-status-map";
+import { NO_ASIN_SQL } from "../shared/asin";
 import { PACK_SIZE_MISMATCH } from "./po-status-map";
 import { yieldMismatchNote } from "@shared/yield-mismatch";
 import { ASIN_ROW_VIEW_SELECT, LINE_VIEW_SELECT } from "./po-expected";
@@ -24,12 +26,14 @@ export const LINE_YIELD_SQL = `COALESCE(l.retailer_units_per_product::numeric / 
  * The ASIN-row SELECT. `where` is a clause on pa.* (e.g. "pa.po_id = $1" or "pa.po_id = ANY($1::uuid[])").
  * pa.* first, then the view's ASIN-unit values under the same names — the later duplicate wins in node-pg's row
  * object (server/po-expected.db.test.ts proves it on the real schema). total_cost = ASIN units × cost per ASIN unit.
+ * A row with no ASIN yet (shared/asin.ts, 2026-11-14) carries Confirm order details — derived here like the pack-size
+ * items, never written to a line; it goes when the row gets its ASIN. unionActionItems de-duplicates and orders.
  */
 export function poAsinRowsSql(where: string): string {
   return `SELECT pa.*, (e.ordered_asin * pa.cost_per_unit) AS total_cost,
                  a.image_url AS thumbnail,
                  ${ASIN_ROW_VIEW_SELECT("e")},
-                 ${ASIN_ACTION_ITEMS_SQL} AS action_items
+                 (${ASIN_ACTION_ITEMS_SQL} || CASE WHEN ${NO_ASIN_SQL("pa.asin")} THEN ARRAY['${CONFIRM_ORDER_DETAILS}']::text[] ELSE '{}'::text[] END) AS action_items
             FROM po_asins pa
             JOIN po_asin_expected e ON e.id = pa.id
             LEFT JOIN asins a ON a.asin = pa.asin

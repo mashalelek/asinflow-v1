@@ -11,6 +11,7 @@
 // the captured text in a side drawer. Every call is logged in po_prefill_log
 // (no page text), and the PO id is attached on save.
 import { z } from "zod/v4";
+import { cleanAsinInput, isValidAsin } from "../shared/asin";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { QueryLike } from "./scheduler/types";
 import { AI, anthropicClient, estimateCost } from "./config/ai";
@@ -353,7 +354,7 @@ export async function enrichPrefill(query: QueryLike, capture: Capture, x: Prefi
     if (inferred != null) hints[`products.${i}.qty_ordered`] = QTY_INFERRED_HINT;
     if (l.unitsPerPack != null) mark(`products.${i}.retailer_units_per_pack`, rupp);
     if (lt) linesSum += Number(lt.line_total); else if (l.unitPrice != null && qty != null) linesSum += l.unitPrice * qty;
-    const guess = l.asinGuess && /^[A-Z0-9]{10}$/i.test(l.asinGuess) ? l.asinGuess.toUpperCase() : null;
+    const guess = l.asinGuess && isValidAsin(cleanAsinInput(l.asinGuess)) ? cleanAsinInput(l.asinGuess) : null; // a placeholder or a non-ASIN guess is no guess (shared/asin.ts)
     // AF's database first (part #, the supplier SKU, past lines from this supplier); none → Amazon's catalog, ranked by the
     // distinctive words; the model's guess only once the catalog confirms it (Maria 2026-11-06). Filled only from AF's database, or
     // when exactly one result matches every distinctive word (amber); otherwise blank with the top 3 to pick from.

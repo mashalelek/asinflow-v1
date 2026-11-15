@@ -20,6 +20,7 @@
 // ASIN units × the pack). A legacy line / row (pack not known) stores its
 // basis as before; server/po-expected.ts holds the two conversions.
 import type { QueryLike } from "./scheduler/types";
+import { ASIN_SHAPE_MESSAGE, asinPlaceholderMessage, isAsinPlaceholder, isValidAsin } from "../shared/asin";
 import { evaluateAutoClose, type AutoCloseOutcome } from "./po-close";
 import { trueYield } from "./po-af-source";
 import { asinUnitsFromLines, lineRatio, ratioYield, retailerUnitsAtPack, type YieldLine } from "../shared/yield";
@@ -94,7 +95,9 @@ export const soldAsParser: Parser = (v) => (SOLD_AS as readonly string[]).includ
 export const soldAsOrNullParser: Parser = (v) => (v === null ? { ok: true, value: null } : soldAsParser(v));
 export const asinParser: Parser = (v) => {
   const s = typeof v === "string" ? v.trim().toUpperCase() : "";
-  return /^[A-Z0-9]{10}$/.test(s) ? { ok: true, value: s } : { ok: false, error: "must be a 10-character ASIN" };
+  // No ASIN yet (shared/asin.ts, 2026-11-14): placeholder text is refused by name; the shape is B0… or an ISBN-10.
+  if (isAsinPlaceholder(s)) return { ok: false, error: asinPlaceholderMessage(s) };
+  return isValidAsin(s) ? { ok: true, value: s } : { ok: false, error: `must be an ASIN (${ASIN_SHAPE_MESSAGE})` };
 };
 
 /** §3 header fields (PO edit drawer). */

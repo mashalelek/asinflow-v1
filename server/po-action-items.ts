@@ -3,7 +3,8 @@
 // ASIN row shows the union of its lines; the PO the union of all its lines.
 // Setting an item on an ASIN writes it to ALL its lines; removing it removes
 // it from all its lines; a product edit touches that line only. Pure.
-import { AUTO_ACTION_ITEMS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
+import { AUTO_ACTION_ITEMS, CONFIRM_ORDER_DETAILS, DISPLAY_ACTION_ITEMS, EXTRA_UNITS_SHIPPED, NO_INVOICE_SAVED, PACK_SIZE_MISMATCH, PACK_SIZE_MISSING, RECEIVING_MISMATCH, REVIEW_VELOCITY } from "./po-status-map";
+import { NO_ASIN_SQL } from "../shared/asin";
 
 /** Display-ordered union of several action-item arrays. */
 export function unionActionItems(lists: ReadonlyArray<readonly string[] | null | undefined>): string[] {
@@ -127,13 +128,16 @@ export const PO_CLOSE_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_CLOSE_EXISTS_SQL})`;
-/** The PO's displayed items: the close set plus FBA receiving mismatch and No invoice saved. */
+/** A PO with an ASIN row that has no ASIN yet (shared/asin.ts, 2026-11-14): shown as Confirm order details, derived; never blocks auto-close. */
+export const NO_ASIN_EXISTS_SQL = `EXISTS (SELECT 1 FROM po_asins pk WHERE pk.po_id = p.id AND ${NO_ASIN_SQL("pk.asin")})`;
+/** The PO's displayed items: the close set plus FBA receiving mismatch, No invoice saved and a row with no ASIN yet. */
 export const PO_ACTION_ITEMS_SQL = `ARRAY(${openLineItemsSql("l.po_id = p.id")}
   UNION SELECT '${EXTRA_UNITS_SHIPPED}' WHERE ${EXTRA_UNITS_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISSING}' WHERE ${PACK_SIZE_MISSING_EXISTS_SQL}
   UNION SELECT '${PACK_SIZE_MISMATCH}' WHERE ${PACK_SIZE_MISMATCH_EXISTS_SQL}
   UNION SELECT '${RECEIVING_MISMATCH}' WHERE ${RECEIVING_MISMATCH_EXISTS_SQL}
-  UNION SELECT '${NO_INVOICE_SAVED}' WHERE ${NO_INVOICE_EXISTS_SQL("p")})`;
+  UNION SELECT '${NO_INVOICE_SAVED}' WHERE ${NO_INVOICE_EXISTS_SQL("p")}
+  UNION SELECT '${CONFIRM_ORDER_DETAILS}' WHERE ${NO_ASIN_EXISTS_SQL})`;
 /** The open review reasons of a PO (alias p), for the Action Items tooltip. */
 export const REVIEW_VELOCITY_REASONS_SQL = `ARRAY(SELECT DISTINCT r FROM po_tracking t, unnest(string_to_array(t.review_reason, '; ')) r
   WHERE t.po_id = p.id AND t.review_reason IS NOT NULL AND t.suppressed_at IS NULL

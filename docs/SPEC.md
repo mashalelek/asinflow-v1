@@ -7089,6 +7089,27 @@ the current model; the paragraphs below are the history it builds on.**
   stored. Extra units shipped (Shipped FBA > Ordered on the ASIN row, red
   chip), Pack size missing / mismatch and FBA receiving mismatch stay derived
   and are never stored.
+- **No ASIN yet (2026-11-14, `shared/asin.ts`):** an ASIN is 10
+  characters — `B0` + 8 of `[A-Z0-9]`, or an ISBN-10 (Maria). A PO ASIN row
+  whose `asin` is anything else ("NA", "KOOKABURRA" — two sheet-era rows)
+  is a row that came in without its ASIN: the ASIN cell reads **No ASIN
+  yet** instead of the link, and the row and its PO carry **Confirm order
+  details** — derived like the pack-size items, never written to a line,
+  gone the moment the row gets a real ASIN. Nothing per-ASIN reads such a
+  row: the Actual COGS sync (`loadAfAsinCostMap`, `poAsinList`, the
+  clearing pass) filters on `IS_ASIN_SQL`, so component 9 no longer fails a
+  pass on "NA: no asin_estimates row". A PO'd ASIN with no `asins` row at
+  all (never onboarded) is the sync's `not_in_af` count, not an error; an
+  `asins` row with no `asin_estimates` row stays the error of 2026-11-09.
+  Entry refuses placeholder text by name: New PO / Edit PO's picker empties
+  the field on blur when it holds NA / N/A / none / tbd / `-` / `?`
+  (`cleanAsinInput`), the form check and `asinParser` say `"NA" is not an
+  ASIN — leave the ASIN empty until you have one`, and Capture PO's model
+  guess is dropped unless it is an ASIN. `npm run onboard:po-asins -- --prod
+  [--check] [--live]` lists the PO'd ASINs with no `asins` row, looks them
+  up in the catalog, and onboards the real ones through the insert-only
+  path + one onboarding job (the 2026-11-14 run: 11 onboarded, 6 not in
+  the catalog and left as `not_in_af`).
 - **Rollup:** a line's items show on its own product row; the ASIN row
   shows the union of its lines (plus the derived items); the PO row shows
   the union over every line. The PO chip carries a **·N** badge when only

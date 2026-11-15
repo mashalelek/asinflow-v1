@@ -14,7 +14,7 @@ beforeAll(async () => {
 afterAll(async () => { await client?.end(); });
 
 type Q = (sql: string, params?: any[]) => Promise<any>;
-const ASIN = "ZZPOCOST01";
+const ASIN = "B0ZZPOCOST"; // an ASIN by shared/asin.ts (B0 + 8); a ZZ… string would be "no ASIN yet" and never read (2026-11-14)
 const noLog = () => {};
 
 /** One PO for the ASIN: one 2-pack row, one line (Individual units), cost per unit and prep as given. */
@@ -166,5 +166,51 @@ describe("Actual COGS follows the newest non-canceled PO (real schema, rolled ba
     expect(logged).toEqual(["PO costs after create PO failed (the hourly pass catches up): connection lost"]);
     expect(await syncAsinCostsAfterPoWrite(boom, [], "nothing", (m) => logged.push(m))).toBeNull();
     expect(logged).toHaveLength(1); // no ASINs: no call, no log
+  });
+});
+
+describe("no ASIN yet / not in AF (shared/asin.ts, 2026-11-14; real schema, rolled back)", () => {
+  it("a PO row whose asin is not an ASIN is not read by the sync, poAsinList or the clearing pass; a PO'd ASIN with no asins row is not_in_af, not an error; an asins row with no estimates row is still the error", async (ctx) => {
+    if (!client) return ctx.skip();
+    const q: Q = (sql, params) => client!.query(sql, params);
+    await q("BEGIN");
+    try {
+      const na = await seedPo(q, "zz-na-1", "2026-11-01", 101, 1);
+      await q(`UPDATE po_asins SET asin = 'NA' WHERE id = $1`, [na.row]);
+      const ghost = await seedPo(q, "zz-ghost-1", "2026-11-02", 7, 1);
+      await q(`UPDATE po_asins SET asin = 'B0ZZGHOST1' WHERE id = $1`, [ghost.row]);          // a PO'd ASIN AF never onboarded
+      const half = await seedPo(q, "zz-half-1", "2026-11-03", 8, 1);
+      await q(`UPDATE po_asins SET asin = 'B0ZZHALF01' WHERE id = $1`, [half.row]);
+      await q(`INSERT INTO asins (asin, title) VALUES ('B0ZZHALF01', 'zz half')`);             // asins row, no estimates row (the 2026-11-09 regression)
+      expect(await poAsinList(q, na.po)).toEqual([]);
+      expect(await poAsinList(q, ghost.po)).toEqual(["B0ZZGHOST1"]);
+      const r = await syncAsinCostsFromPos(q, new Set(["NA", "B0ZZGHOST1", "B0ZZHALF01"]), noLog);
+      expect(r.errors).toEqual(["B0ZZHALF01: no asin_estimates row"]);
+      expect(r.notInAf).toBe(1); expect(r.notInAfAsins).toEqual(["B0ZZGHOST1"]);
+      expect(r.updated).toBe(0);
+      const whole = await syncAsinCostsFromPos(q, undefined, noLog);                         // the hourly pass: the NA row is not an error either
+      expect(whole.errors.filter((e) => e.startsWith("NA"))).toEqual([]);
+      expect(whole.notInAfAsins).toContain("B0ZZGHOST1");
+      // the after-write sync named the PO's ASINs (none for the NA PO) and never threw
+      expect(await syncAsinCostsAfterPoWrite(q, await poAsinList(q, na.po), "test", noLog)).toBeNull();
+    } finally { await q("ROLLBACK"); }
+  });
+  it("the PO page's row and the PO carry Confirm order details while the row has no ASIN yet", async (ctx) => {
+    if (!client) return ctx.skip();
+    const { poAsinRowsSql } = await import("./po-queries");
+    const { PO_ACTION_ITEMS_SQL } = await import("./po-action-items");
+    const q: Q = (sql, params) => client!.query(sql, params);
+    await q("BEGIN");
+    try {
+      const na = await seedPo(q, "zz-na-2", "2026-11-01", 101, 1);
+      await q(`UPDATE po_asins SET asin = 'NA' WHERE id = $1`, [na.row]);
+      const row = (await q(poAsinRowsSql("pa.id = $1"), [na.row])).rows[0];
+      expect(row.action_items).toContain("Confirm order details");
+      const po = (await q(`SELECT ${PO_ACTION_ITEMS_SQL} AS items FROM purchase_orders p WHERE p.id = $1`, [na.po])).rows[0];
+      expect(po.items).toContain("Confirm order details");
+      await q(`UPDATE po_asins SET asin = $2 WHERE id = $1`, [na.row, ASIN]);
+      expect((await q(poAsinRowsSql("pa.id = $1"), [na.row])).rows[0].action_items).not.toContain("Confirm order details");
+      expect((await q(`SELECT ${PO_ACTION_ITEMS_SQL} AS items FROM purchase_orders p WHERE p.id = $1`, [na.po])).rows[0].items).not.toContain("Confirm order details");
+    } finally { await q("ROLLBACK"); }
   });
 });

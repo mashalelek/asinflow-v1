@@ -16,7 +16,15 @@ describe("checkPoForm", () => {
     const c = checkPoForm(f);
     expect(c.ok).toBe(false);
     expect(c.errors).toEqual(expect.arrayContaining(["Supplier is required", "Order # is required"]));
-    expect(c.productErrors[0]).toEqual(expect.arrayContaining(["Qty (Product units) must be more than 0 (at most 2 decimals)", "map it to an ASIN (10 characters)"]));
+    expect(c.productErrors[0]).toEqual(expect.arrayContaining(["Qty (Product units) must be more than 0 (at most 2 decimals)", "map it to an ASIN (an ASIN is 10 characters: B0… or an ISBN-10)"]));
+  });
+  it("no ASIN yet (2026-11-14): placeholder text is named, not shape-checked; a 10-character non-ASIN fails the shape; an ISBN-10 passes", () => {
+    const na = base(); na.products[0].asin = "NA";
+    expect(checkPoForm(na).productErrors[0]).toContain('"NA" is not an ASIN — leave the ASIN empty until you have one');
+    const kook = base(); kook.products[0].asin = "kookaburra";
+    expect(checkPoForm(kook).productErrors[0]).toContain("map it to an ASIN (an ASIN is 10 characters: B0… or an ISBN-10)");
+    const isbn = base(); isbn.products[0].asin = "080442957X";
+    const c = checkPoForm(isbn); expect(c.productErrors[0] ?? []).toEqual([]); expect(c.asins[0]?.asin).toBe("080442957X");
   });
   it("a valid single-product PO: one ASIN row, Ordered = qty × yield, live totals, cost / unit from price", () => {
     const c = checkPoForm(base());

@@ -19,6 +19,7 @@
  * known ASIN's pack asks "This PO only" (default) or "Update ASIN in AF".
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { cleanAsinInput } from "@shared/asin";
 // (File name kept for history — since 2026-11-01 this is the New PO PAGE, no Dialog.)
 import { Plus, Trash2, AlertTriangle, Sparkles, Database, FileText, ArrowUp } from "lucide-react";
 import { nameMismatchNote } from "@shared/name-match";
@@ -166,7 +167,7 @@ function AsinPicker({ value, product, sku = "", supplier, guess, known, initial,
   };
   return (
     <div className={compact ? "relative w-full" : "relative min-w-[11rem]"} data-testid={`asin-picker-${rowIndex}`}>
-      <Input ref={inputRef} value={value} role="combobox" aria-expanded={open} aria-autocomplete="list" onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); setHi(0); }} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={onKey} placeholder={compact ? "ASIN / title" : "ASIN / title / SKU"} className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
+      <Input ref={inputRef} value={value} role="combobox" aria-expanded={open} aria-autocomplete="list" onChange={(e) => { onChange(e.target.value.toUpperCase()); setOpen(true); setHi(0); }} onFocus={() => setOpen(true)} onBlur={() => { setOpen(false); if (value !== "" && cleanAsinInput(value) === "") onChange(""); }} onKeyDown={onKey} placeholder={compact ? "ASIN / title" : "ASIN / title / SKU"} className={`h-8 font-mono text-xs ${mark}`} data-testid={`input-new-po-asin-${rowIndex}`} autoComplete="off" />
       {open && (
         <div ref={listRef} className={`absolute left-0 z-50 w-[28rem] overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md ${place.up ? "bottom-full mb-1" : "top-full mt-1"}`} style={{ maxHeight: place.max }} role="listbox" onMouseDown={(e) => e.preventDefault()} data-testid={`asin-suggestions-${rowIndex}`} data-placement={place.up ? "up" : "down"}>
           {shown.length === 0 && !notInAf && <div className="px-2 py-1.5 text-xs text-muted-foreground">{q.length >= 2 ? "No match — keep typing an ASIN, title, SKU or brand" : product.trim() ? "No suggestions yet — type an ASIN, title or SKU" : "Type an ASIN, title or SKU"}</div>}

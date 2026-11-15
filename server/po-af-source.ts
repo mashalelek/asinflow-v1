@@ -17,6 +17,7 @@ import type { QueryLike } from "./scheduler/types";
 import { lineRatio, ratioYield } from "../shared/yield";
 import type { SheetAsinData, SheetRow } from "./google-sheets";
 import { NEWEST_PO_ORDER } from "./po-entry-seq";
+import { IS_ASIN_SQL } from "../shared/asin";
 
 const num = (v: unknown): number | null => (v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 const str = (v: unknown): string | null => (v == null || v === "" ? null : String(v));
@@ -30,7 +31,8 @@ const mdy = (d: unknown): string | null => {
 /**
  * Per ASIN: the newest ASIN row whose lines are not all canceled → cost/unit,
  * prep (NULL = not recorded → 0, the sheet reader's "blank prep = $0" rule),
- * supplier. orderedQty is 0 (On Order comes from asin-po-pipeline.ts).
+ * supplier. orderedQty is 0 (On Order comes from asin-po-pipeline.ts). A row whose `asin` is not an ASIN ("no ASIN yet",
+ * shared/asin.ts, 2026-11-14) is not in the map: nothing per-ASIN can be written for it, and it is not an error.
  */
 export async function loadAfAsinCostMap(query: QueryLike, asins?: readonly string[]): Promise<{ data: Map<string, SheetAsinData>; rowsRead: number }> {
   const filter = asins && asins.length > 0 ? `AND pa.asin = ANY($1::text[])` : "";
@@ -43,7 +45,7 @@ export async function loadAfAsinCostMap(query: QueryLike, asins?: readonly strin
   const rows = (await query(
     `SELECT DISTINCT ON (pa.asin) pa.asin, pa.cost_per_unit, pa.prep_cost, p.supplier
        FROM po_asins pa JOIN purchase_orders p ON p.id = pa.po_id${filter ? "" : " JOIN po_asin_expected e ON e.id = pa.id"}
-      WHERE ${notCanceled} ${filter}
+      WHERE ${notCanceled} AND ${IS_ASIN_SQL("pa.asin")} ${filter}
       ORDER BY pa.asin, ${NEWEST_PO_ORDER}`,
     asins && asins.length > 0 ? [asins.map((a) => a.toUpperCase())] : [],
   )).rows as any[];

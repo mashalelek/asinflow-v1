@@ -41,6 +41,16 @@ describe("field parsers", () => {
   });
 });
 
+describe("asinParser (shared/asin.ts, 2026-11-14)", () => {
+  it("B0… and ISBN-10 pass upper-cased; placeholder text is refused by name; a 10-character non-ASIN fails the shape", () => {
+    expect(parseEdits(LINE_FIELDS, { asin: " b0h1j8wn3f " })).toMatchObject({ ok: true, edits: { asin: "B0H1J8WN3F" } });
+    expect(parseEdits(LINE_FIELDS, { asin: "080442957x" })).toMatchObject({ ok: true, edits: { asin: "080442957X" } });
+    expect(parseEdits(LINE_FIELDS, { asin: "NA" })).toMatchObject({ ok: false, error: expect.stringContaining('"NA" is not an ASIN') });
+    expect(parseEdits(LINE_FIELDS, { asin: "n/a" })).toMatchObject({ ok: false, error: expect.stringContaining("is not an ASIN") });
+    expect(parseEdits(LINE_FIELDS, { asin: "KOOKABURRA" })).toMatchObject({ ok: false, error: expect.stringContaining("B0… or an ISBN-10") });
+  });
+});
+
 describe("change detection and log text", () => {
   it("only fields whose value changes; numbers compared without trailing zeros; dates as YYYY-MM-DD", () => {
     const cur = { subtotal: "12.50", order_date: new Date(2026, 9, 18), notes: null, supplier: "walmart.com" };

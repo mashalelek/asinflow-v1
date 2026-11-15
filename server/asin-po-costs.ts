@@ -13,6 +13,7 @@
 // the uploaded ASINs; Push to Aura's cost half for the selection; the Sync POs button. SPEC §2 / §11 / §22.
 import { loadAfAsinCostMap } from "./po-af-source";
 import { log as defaultLog } from "./log";
+import { IS_ASIN_SQL, isValidAsin } from "../shared/asin";
 
 export type QueryFn = (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
 type Log = (msg: string, tag?: string) => void;
@@ -20,7 +21,11 @@ type Log = (msg: string, tag?: string) => void;
 /** The stored source label for a cost that came from AF's POs (migration 109; was 'af_po'). */
 export const AF_PO_COGS_SOURCE = "af_po";
 
-export interface AsinCostSyncResult { updated: number; skipped: number; errors: string[]; cleared: number; clearedAsins: string[] }
+export interface AsinCostSyncResult {
+  updated: number; skipped: number; errors: string[]; cleared: number; clearedAsins: string[];
+  /** PO'd ASINs with no `asins` row at all (never onboarded — the sheet-era POs): nothing to write, not an error. 2026-11-14. */
+  notInAf: number; notInAfAsins: string[];
+}
 
 export async function syncAsinCostsFromPos(
   query: QueryFn,
@@ -34,6 +39,7 @@ export async function syncAsinCostsFromPos(
   let updated = 0;
   let skipped = 0;
   const errors: string[] = [];
+  const notInAfAsins: string[] = [];
 
   for (const [asin, data] of Array.from(sheetData.entries())) {
     if (asinFilter && asinFilter.size > 0 && !asinFilter.has(asin)) {
@@ -92,9 +98,13 @@ export async function syncAsinCostsFromPos(
       if ((result.rowCount ?? 0) > 0) {
         updated++;
         log(`PO costs ${asin}: cogs=${data.cogs ?? "-"} actual=${actBranch} est=${estBranch} prep=${data.prepCost ?? "-"}`, "sheets");
-      } else {
-        // A PO'd ASIN with no asin_estimates row (2026-11-09): named, not counted as skipped.
+      } else if ((await query(`SELECT 1 FROM asins WHERE asin = $1`, [asin])).rowCount) {
+        // An asins row with no asin_estimates row (2026-11-09, the $16 regression): named, not counted as skipped.
         errors.push(`${asin}: no asin_estimates row`);
+      } else {
+        // No asins row either (2026-11-14): a PO'd ASIN AF never onboarded (sheet-era POs; the dead or mistyped ones stay
+        // this way). Nothing per-ASIN exists to write — a skip the counts name (not_in_af), never a failed step.
+        notInAfAsins.push(asin);
       }
 
       // Update supplier on asins table if available
@@ -119,7 +129,8 @@ export async function syncAsinCostsFromPos(
   } catch (err: any) {
     errors.push(`_clear: ${err.message}`);
   }
-  return { updated, skipped, errors, cleared: clearedAsins.length, clearedAsins };
+  if (notInAfAsins.length) log(`PO costs: ${notInAfAsins.length} PO'd ASIN(s) with no asins row, skipped: ${notInAfAsins.join(", ")}`, "sheets");
+  return { updated, skipped, errors, cleared: clearedAsins.length, clearedAsins, notInAf: notInAfAsins.length, notInAfAsins };
 }
 
 /**
@@ -136,7 +147,7 @@ export async function clearCostsOfFullyCanceledAsins(query: QueryFn, asins?: rea
     `WITH r AS (
        SELECT pa.asin, bool_and(${canceled}) AS all_canceled
          FROM po_asins pa${filter ? "" : " JOIN po_asin_expected e ON e.id = pa.id"}
-        ${filter ? "WHERE pa.asin = ANY($1::text[])" : ""}
+        WHERE ${IS_ASIN_SQL("pa.asin")}${filter ? " AND pa.asin = ANY($1::text[])" : ""}
         GROUP BY pa.asin)
      UPDATE asin_estimates ae
         SET actual_cogs = NULL, cogs = NULL, cogs_source = NULL, prep_override = NULL
@@ -150,10 +161,10 @@ export async function clearCostsOfFullyCanceledAsins(query: QueryFn, asins?: rea
 }
 
 
-/** The ASINs on a PO (empty for null or a deleted PO). */
+/** The ASINs on a PO (empty for null or a deleted PO); a row with no ASIN yet (shared/asin.ts) is not one. */
 export async function poAsinList(query: QueryFn, poId: string | null | undefined): Promise<string[]> {
   if (!poId) return [];
-  return (await query(`SELECT asin FROM po_asins WHERE po_id = $1`, [poId])).rows.map((r: any) => String(r.asin));
+  return (await query(`SELECT asin FROM po_asins WHERE po_id = $1`, [poId])).rows.map((r: any) => String(r.asin)).filter(isValidAsin);
 }
 
 /**

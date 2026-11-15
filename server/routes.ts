@@ -78,6 +78,7 @@ import { runFeesStage } from "./refresh-job";
 import { enqueueJob, enqueueOnboardingJob, findRecentSameOnboarding, ONBOARDING_DEDUPE_MINUTES } from "./scheduler/jobs-repo";
 import { fetchCatalogBatch, fetchFeesBatch } from "./product-info-batch";
 import { upsertAsinResult, upsertCsvCogs, appendNotesForAsin } from "./asin-upsert";
+import { ASIN_SHAPE_MESSAGE, cleanAsinInput, isValidAsin } from "../shared/asin";
 import { offerAddForAsin, preFilterSubmitSet, type OfferAddResult, type PreFilterResult } from "./offer-add";
 import { submitOfferAddBatch, type SubmitAsinRow } from "./offer-add-submit";
 
@@ -4503,16 +4504,16 @@ export async function registerRoutes(
   // One ASIN's AF facts (title, SKU, pack fields) — "AF knows the ASIN".
   app.get("/api/pos/asin-info/:asin", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const asin = String(req.params.asin ?? "").toUpperCase();
-    if (!/^[A-Z0-9]{10}$/.test(asin)) { res.status(400).json({ message: "a 10-character ASIN is required" }); return; }
+    const asin = cleanAsinInput(req.params.asin);
+    if (!isValidAsin(asin)) { res.status(400).json({ message: `an ASIN is required (${ASIN_SHAPE_MESSAGE})` }); return; }
     try { const info = await asinInfo(poQuery, asin); res.json({ info }); }
     catch (err: any) { res.status(500).json({ message: err.message }); }
   });
   // "Not in AF — Add to AF": insert the ASIN and run the normal onboarding refresh for it.
   app.post("/api/pos/add-asin", async (req: Request, res: Response) => {
     if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    const asin = String((req.body ?? {}).asin ?? "").trim().toUpperCase();
-    if (!/^[A-Z0-9]{10}$/.test(asin)) { res.status(400).json({ message: "a 10-character ASIN is required" }); return; }
+    const asin = cleanAsinInput((req.body ?? {}).asin);
+    if (!isValidAsin(asin)) { res.status(400).json({ message: `an ASIN is required (${ASIN_SHAPE_MESSAGE})` }); return; }
     try {
       const ins = await query(`INSERT INTO asins (asin) VALUES ($1) ON CONFLICT (asin) DO NOTHING RETURNING asin`, [asin]);
       const r = await enqueueOnboardingJob([asin], { requestedBy: req.session?.userId ?? null });
