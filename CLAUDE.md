@@ -83,6 +83,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 ### Settings stored in DB (`settings` table):
 - `default_date_range`, `include_inbound_shipping`, `google_sheet_id`, `default_fulfillment_channel`
 - `hazmat_ship_surcharge`, `hazmat_prep_surcharge`
+- `po_payment_methods` (the cards, canonical names in order), `po_payment_method_last4`, `po_payment_method_aliases`, `po_payment_method_reward_pct` — a new card is a migration appending to all three (115 Wells Fargo (0875) is the template); no Settings screen edits them yet
 - Inbound shipping ($/lb), prep cost ($/unit), additional fees ($/unit), low-inventory surcharge ($/unit)
 - Profitability thresholds (min ROI %, min margin %)
 

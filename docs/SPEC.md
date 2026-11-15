@@ -6114,7 +6114,13 @@ revival.
 (14 since migration 081: Amex Gold + Amex Plus replace Amex (1005)),
 `po_cashback_sites` (5), `po_emails` (2), `po_purchasers` (1); maps:
 `po_payment_method_aliases` (alias → canonical) and
-`po_payment_method_last4` (canonical → last 4, migration 081).
+`po_payment_method_last4` (canonical → last 4, migration 081). **A new card
+is added the same way (Wells Fargo (0875), Maria 2026-11-15, migration 115):**
+one migration appends the canonical name to `po_payment_methods`, its last 4
+to `po_payment_method_last4` and the bare name as an alias, and relinks the
+payments typed by hand before it existed (one History row each) — there is
+no Settings screen for the lists yet (a Settings → Payment cards editor over
+the three keys would be the way to let Maria add one herself).
 **List order is meaningful: element 0 is the default** (mpeters.cqg@gmail.com;
 Maria). The entry form must preserve order; never sort these lists.
 

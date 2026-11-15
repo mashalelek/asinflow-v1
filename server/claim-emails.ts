@@ -45,6 +45,7 @@ import { attachReturnLabel, readReturnEmail, type ReturnEmailReading } from "./c
 import { mdOf as mdIso } from "@shared/claim-bucket";
 import { logEdits } from "./po-edit";
 import type { QueryLike } from "./scheduler/types";
+import { resolvePaymentNickname, type PaymentLists } from "@shared/po-form";
 
 export const EMAIL_WATERMARK_KEY = "claims.email_watermark";
 export const CLAIM_EMAIL_AI_MAX_CALLS = 25;
@@ -405,7 +406,7 @@ export async function applyEmailPlan(query: QueryLike, e: ClaimEmail, p: EmailPl
         await logClaimEvent(query, c.id, "opened", "Opened from the supplier's refund email", null);
         await logEdits(query, c.po_id, null, "claim", String(c.id), [{ field: "claim opened", old: "suggested", new: `open — the supplier's refund email ${subject}` }]);
       }
-      await confirmSupplier(query, c.id, { at: when, outcome: method, amount: p.amount, detail: refundDetail(e, method) }, null);
+      await confirmSupplier(query, c.id, { at: when, outcome: method, amount: p.amount, detail: await refundDetail(query, e, method) }, null);
       await stampEvent(query, c.id, "supplier_confirmed", e, `$${(p.amount ?? 0).toFixed(2)} · ${subject} · order # and amount match`);
       return { row: 1, claim_id: c.id, what: `confirmed ${method} $${p.amount?.toFixed(2)} on #${c.id}` };
     }
@@ -513,10 +514,28 @@ export function emailItemCount(subject: string): number {
   const more = /\+(\d+) items?\b/i.exec(subject);
   return bracket + (more ? Number(more[1]) : 0);
 }
-/** "CapitalOne ••6830" when the email prints the card; else the method word. */
-function refundDetail(e: ClaimEmail, method: RefundMethod): string {
-  const m = /(?:ending in|ending|last four|\*{2,}|••)\s*(\d{4})\b/i.exec(e.text);
-  return `${method === "gift_card" ? "gift card" : method === "store_credit" ? "store credit" : "card"}${m ? ` ••${m[1]}` : ""} · from email`;
+/** The last 4 the email prints ("ending in 0875", "••6830", "****7927"), else null. Pure. */
+export function refundLast4(text: string): string | null {
+  return /(?:ending in|ending|last four|\*{2,}|••)\s*(\d{4})\b/i.exec(text)?.[1] ?? null;
+}
+/**
+ * The refund's method word for the claim's outcome detail: "card Wells Fargo (0875) · from email" when the last 4
+ * the email prints is one of AF's cards (settings.po_payment_method_last4 — the same lists the PO form and the
+ * capture prefill resolve a card with, resolvePaymentNickname; a last 4 two cards share names neither),
+ * "card ••6830" when it is not, else the method word. Pure.
+ */
+export function refundCardWord(text: string, method: RefundMethod, lists: PaymentLists | null): string {
+  const kind = method === "gift_card" ? "gift card" : method === "store_credit" ? "store credit" : "card";
+  const l4 = refundLast4(text);
+  if (!l4) return kind;
+  const name = lists ? resolvePaymentNickname("", l4, lists).nickname : "";
+  return `${kind} ${name || `••${l4}`}`;
+}
+async function refundDetail(query: QueryLike, e: ClaimEmail, method: RefundMethod): Promise<string> {
+  const rows = (await query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [["po_payment_methods", "po_payment_method_aliases", "po_payment_method_last4"]])).rows as Array<{ key: string; value: unknown }>;
+  const v = (k: string) => rows.find((r) => r.key === k)?.value;
+  const lists: PaymentLists = { methods: Array.isArray(v("po_payment_methods")) ? (v("po_payment_methods") as string[]) : [], aliases: (v("po_payment_method_aliases") ?? {}) as Record<string, string>, last4: (v("po_payment_method_last4") ?? {}) as Record<string, string> };
+  return `${refundCardWord(e.text, method, lists)} · from email`;
 }
 async function fetchAttachment(gmail: gmail_v1.Gmail, messageId: string, a: EmailAttachment): Promise<Buffer | null> {
   if (!a.attachmentId) return null;
