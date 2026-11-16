@@ -69,6 +69,9 @@ const promised = async (q: Q, id: number) => {
   await q(`UPDATE supplier_claim_tasks SET done_at = '2026-11-05T14:00:00Z' WHERE claim_id = $1 AND kind = 'confirm_outcome'`, [id]);
 };
 const carrier = (q: Q, t: EasypostTracker) => applyCarrierUpdate(q, trackerUpdate(t), t);
+// Check on it ticked AT the sweep's instant: a plain tick is stamped now(), and the timer restarts from the latest tick, so a
+// tick on the real clock drifted past the fixed "5 business days" dates below once the calendar caught up (2026-11-16).
+const checked = async (q: Q, id: number, at: Date) => { const t = (await one(q, id)).tasks.find((x) => x.kind === "check_on_it" && !x.done_at)!; await doneTask(q, t.id, null, {}); await q(`UPDATE supplier_claim_tasks SET done_at = $2::timestamptz WHERE id = $1`, [t.id, at.toISOString()]); };
 const ship = async (q: Q, poId: string, number: string, shippedAt: string, opts: { retailer?: string; pushed?: string[]; gmail?: string } = {}) =>
   Number((await q(`INSERT INTO po_tracking (po_id, carrier, tracking_number, retailer_order_id, shipped_at, gmail_message_id, source, status, pushed_at, pushed_velocity_ids) VALUES ($1, 'UPS', $2, $3, $4, $5, 'regex', $6, $7, $8) RETURNING id`,
     [poId, number, opts.retailer ?? null, shippedAt, opts.gmail ?? `zz-mail-${number}`, opts.pushed ? "pushed" : "matched", opts.pushed ? shippedAt : null, opts.pushed ?? null])).rows[0].id);
@@ -105,7 +108,7 @@ describe("§3.13 replacements, end to end (real schema, rolled back)", () => {
       r = await row(q, id, stall);
       expect(r).toMatchObject({ group: "timed_out", sentence: "Replacement promised 11/5 · no shipping email or tracking in 5 business days", action: { label: "Check on it", secondary: "snooze" } });
       line("7", "promised, nothing shipped in 5 business days", r, "Check on it", "—");
-      await doneTask(q, (await one(q, id)).tasks.find((t) => t.kind === "check_on_it" && !t.done_at)!.id, null, {});
+      await checked(q, id, stall);
       // row 3: a tracking row arrives on the PO's own order # after the promise, pushed to the original Velocity order → tied, Shipped
       const t1 = await ship(q, s.v.po, "1Z4F0R490398184975", "2026-11-12T18:12:00Z", { retailer: "ZZ5471188", pushed: ["6778"] });
       const sw = await sweepReplacements(q, NOW);
@@ -126,7 +129,7 @@ describe("§3.13 replacements, end to end (real schema, rolled back)", () => {
       // row 7 again: in transit, no scan in 5 business days
       const stall2 = new Date("2026-11-23T15:00:00Z");
       expect((await sweepClaimTimers(q, stall2, null)).find((x) => x.claim_id === id)?.reason).toBe("5 business days: replacement shipped 11/13 · no new carrier scan");
-      await doneTask(q, (await one(q, id)).tasks.find((t) => t.kind === "check_on_it" && !t.done_at)!.id, null, {});
+      await checked(q, id, stall); // (dated before the 11/17 delivery below: the rows are illustrative, not one timeline — the restart must not outrun the delivery anchor)
       // row 7 (D8): delivered to Velocity, the line still short → 3 business days, "Velocity received 2 of 12"
       await carrier(q, trk("tracker-return-delivered-after-label", "1Z4F0R490398184975"));
       await q(`UPDATE po_line_items SET qty_received = 2 WHERE id = $1`, [s.v.line]);
@@ -137,7 +140,7 @@ describe("§3.13 replacements, end to end (real schema, rolled back)", () => {
       r = await row(q, id, late);
       expect(r.sentence).toBe("Replacement delivered 11/17 · Velocity received 2 of 12 · 3 business days since delivery");
       line("7", "delivered, Velocity short after 3 business days", r, "Check on it", "—");
-      await doneTask(q, (await one(q, id)).tasks.find((t) => t.kind === "check_on_it" && !t.done_at)!.id, null, {});
+      await checked(q, id, late);
       // row 5: Velocity's count covers the line → Arrived → Closed, with no click
       await q(`UPDATE po_line_items SET qty_received = 12 WHERE id = $1`, [s.v.line]);
       expect((await sweepReplacements(q, late)).arrived).toBe(1);
