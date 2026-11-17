@@ -23,6 +23,31 @@ async function lists(q: Q): Promise<PaymentLists> {
   return { methods: v("po_payment_methods") ?? [], aliases: v("po_payment_method_aliases") ?? {}, last4: v("po_payment_method_last4") ?? {} };
 }
 
+describe("The Walmart card payments with no last 4 get 0302 (migration 119)", () => {
+  it("a 'Walmart card' row with last4 NULL gets 0302 with one History row; one already on 0302, one on another last 4, another card's NULL and a store-credit 'Walmart cash' row are left alone; running it again adds nothing", async (ctx) => {
+    if (!client) return ctx.skip();
+    const q: Q = (s, p) => client!.query(s, p);
+    const sql = readFileSync(join(__dirname, "..", "database", "migrations", "119_walmart_card_last4_backfill.sql"), "utf8");
+    await q("BEGIN");
+    try {
+      const po = (await q(`INSERT INTO purchase_orders (order_id, order_date, supplier, subtotal, tax, sh_donations, discount, refund_amount, order_total, ships_to) VALUES ('zz-walmart-119', '2026-08-01', 'zz-test.com', 10, 0, 0, 0, 0, 10, 'velocity') RETURNING id`)).rows[0].id as string;
+      const ins = async (method: string, nick: string | null, last4: string | null) => Number((await q(`INSERT INTO po_payments (po_id, position, method, nickname, last4, amount) VALUES ($1, 0, $2, $3, $4, 10) RETURNING id`, [po, method, nick, last4])).rows[0].id);
+      const blank = await ins("card", "Walmart card", null), has = await ins("card", "Walmart card", "0302"), other = await ins("card", "Walmart card", "1234"), chase = await ins("card", "Chase", null), cash = await ins("store_credit", "Walmart cash", null);
+      await q(sql); await q(sql);
+      const l4 = async (id: number) => (await q(`SELECT last4 FROM po_payments WHERE id = $1`, [id])).rows[0].last4;
+      expect(await l4(blank)).toBe("0302");
+      expect(await l4(has)).toBe("0302");
+      expect(await l4(other)).toBe("1234");
+      expect(await l4(chase)).toBeNull();
+      expect(await l4(cash)).toBeNull();
+      expect((await q(`SELECT field, old_value, new_value FROM po_edit_log WHERE po_id = $1 ORDER BY id`, [po])).rows).toEqual([
+        { field: "payment last 4 (Walmart card 0302 filled in, migration 119)", old_value: null, new_value: "0302" },
+      ]);
+    } finally { await q("ROLLBACK"); }
+    expect((await q(`SELECT count(*)::int AS n FROM purchase_orders WHERE order_id = 'zz-walmart-119'`)).rows[0].n).toBe(0);
+  });
+});
+
 describe("Walmart card (0302) and Amex (1008) are cards like every other (migration 118)", () => {
   it("Walmart card keeps its name and aliases and gains its last 4; Amex (1008) is a fourth Amex that resolves by last 4 only ('Amex' + 1001 still lands on Amex (1001)); the migration relinks 'OnePay CashRewards' 0302 and 'Amex' 1008 rows with a History row each, leaves a 'Walmart card' row with no last 4 and another card's 1008 alone, and runs twice without a second row", async (ctx) => {
     if (!client) return ctx.skip();
@@ -53,7 +78,7 @@ describe("Walmart card (0302) and Amex (1008) are cards like every other (migrat
       const nick = async (id: number) => (await q(`SELECT nickname, last4 FROM po_payments WHERE id = $1`, [id])).rows[0];
       expect(await nick(onepay)).toEqual({ nickname: "Walmart card", last4: "0302" });
       expect(await nick(walmartCanon)).toEqual({ nickname: "Walmart card", last4: "0302" });
-      expect(await nick(walmartNoLast4)).toEqual({ nickname: "Walmart card", last4: null }); // the last 4 is never filled in by the migration
+      expect(await nick(walmartNoLast4)).toEqual({ nickname: "Walmart card", last4: null }); // 118 never fills a last 4 in; 119 does, for Walmart card rows
       expect(await nick(amex)).toEqual({ nickname: "Amex (1008)", last4: "1008" });
       expect(await nick(amexBlank)).toEqual({ nickname: "Amex (1008)", last4: "1008" });
       expect(await nick(chase1008)).toEqual({ nickname: "Chase", last4: "1008" });
