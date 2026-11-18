@@ -54,6 +54,12 @@ const one = async (q: Q, id: number) => (await loadClaims(q, { ids: [id] }))[0];
 const openKinds = (c: { tasks: Array<{ kind: string; done_at: string | null }> }) => c.tasks.filter((t) => !t.done_at).map((t) => t.kind);
 /** The claim was reported to the supplier (a return follows the supplier's answer): the Contact supplier tick, dated. */
 const reported = async (q: Q, id: number) => { const t = (await one(q, id)).tasks.find((x) => x.kind === "contact_supplier" && !x.done_at)!; await doneTask(q, t.id, null, { date: "2026-11-05", channel: "email" }); };
+/** Check on it ticked on the test's fixed clock (NOW), never on the run's: doneTask stamps done_at = now() — the DATABASE
+ *  clock, which no fake timer reaches — and every tick restarts the timer (Maria 2026-11-11), so an undated tick moved the
+ *  row-8 anchor to the day the test ran: it passed until 2026-11-18 10:00 ET (tick + 5 business days ≤ stall2) and failed
+ *  after. Same helper as claim-replacements.db.test.ts. (A tick dated at the stall itself — 11/23 — would, by the same rule,
+ *  push the second row-8 deadline to 11/30; the table's 11/25 assumes the tick precedes the 11/17 delivery event.) */
+const checked = async (q: Q, id: number, at: Date = NOW) => { const t = (await one(q, id)).tasks.find((x) => x.kind === "check_on_it" && !x.done_at)!; await doneTask(q, t.id, null, {}); await q(`UPDATE supplier_claim_tasks SET done_at = $2::timestamptz WHERE id = $1`, [t.id, at.toISOString()]); };
 const steps = (c: any) => claimSteps(c).map((s) => `${s.done ? "✓" : s.current ? "●" : "○"} ${s.key}${s.source ? `(${s.source})` : ""}`).join(" · ");
 /** The carrier's event as every EasyPost write applies it (register / webhook / sweep): the generic inbound write, then the return rows. */
 const carrier = (q: Q, t: EasypostTracker) => applyCarrierUpdate(q, trackerUpdate(t), t);
@@ -120,7 +126,7 @@ describe("§3.12 rows, end to end (real schema, rolled back)", () => {
       r = await row(q, id, stall);
       expect(r).toMatchObject({ bucket: "needs_attention", group: "timed_out", sentence: "Return shipped 11/13 · no new carrier scan in 5 business days", action: { label: "Check on it", secondary: "snooze" } });
       line("8", "no new scan in 5 business days", r, "Check on it", "the timer restarts");
-      await doneTask(q, (await one(q, id)).tasks.find((t) => t.kind === "check_on_it" && !t.done_at)!.id, null, {});
+      await checked(q, id);
       expect((await row(q, id, stall)).bucket).toBe("waiting_shipment");
       // row 6: delivered → Delivered, from tracking; Waiting on supplier for the refund confirmation
       await carrier(q, trk("tracker-return-delivered-after-label"));
@@ -136,7 +142,7 @@ describe("§3.12 rows, end to end (real schema, rolled back)", () => {
       r = await row(q, id, stall2);
       expect(r).toMatchObject({ group: "timed_out", sentence: "Return delivered 11/17 · no refund confirmation in 5 business days", action: { label: "Check on it" } });
       line("8", "delivered, no refund email in 5 business days", r, "Check on it", "—");
-      await doneTask(q, (await one(q, id)).tasks.find((t) => t.kind === "check_on_it" && !t.done_at)!.id, null, {});
+      await checked(q, id);
       // row 7: the refund email (§3.11 row 1) → Waiting on refund to post; Refund received closes it
       const refund = await planOf(q, "row1-walmart-refund");
       expect(refund.p).toMatchObject({ row: 1, claim: { id } });
@@ -223,7 +229,7 @@ describe("§3.12 rows, end to end (real schema, rolled back)", () => {
       expect(r).toMatchObject({ bucket: "needs_attention", group: "timed_out", sentence: "Return by 11/30 · 3 days left · label saved 11/10, not shipped yet", action: { label: "Check on it", secondary: "snooze" } });
       line("9", "return by 11/30, 3 days away, not shipped", r, "Check on it / chase Velocity", "—");
       expect((await sweepClaimTimers(q, new Date("2026-11-28T15:00:00Z"), null)).find((x) => x.claim_id === id)).toBeUndefined(); // once per date
-      await doneTask(q, (await one(q, id)).tasks.find((t) => t.kind === "check_on_it" && !t.done_at)!.id, null, {});
+      await checked(q, id);
       await setReturnFacts(q, id, { return_by: "2026-12-15" }, null);
       expect(await one(q, id)).toMatchObject({ return_by: "2026-12-15", return_by_source: "manual" });
       expect((await sweepClaimTimers(q, new Date("2026-11-28T15:00:00Z"), null)).find((x) => x.claim_id === id)).toBeUndefined();
