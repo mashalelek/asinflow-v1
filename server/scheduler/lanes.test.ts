@@ -92,6 +92,28 @@ describe("onboarding jobs", () => {
     expect((await enqueueOnboardingJob([], {}, q)).job).toBeNull();
   });
 
+  it("inserting ASINs enqueues exactly ONE new-ASIN Keepa job beside the refresh onboarding job — from the same helper (commit 3, 2026-11-18); none without a key", async () => {
+    const inserts: any[][] = [];
+    const q: QueryLike = async (text, params) => {
+      if (text.includes("array_agg(x ORDER BY x)")) return { rows: [], rowCount: 0 };
+      if (text.includes("unnest(scope_asins)")) return { rows: [], rowCount: 0 };
+      if (text.includes("INSERT INTO jobs")) { inserts.push(params!); return { rows: [{ id: inserts.length, kind: params![8], trigger: params![0], scope_asins: params![4], progress: {} }], rowCount: 1 }; }
+      throw new Error(`unexpected ${text.slice(0, 40)}`);
+    };
+    const r = await enqueueOnboardingJob(["B000000001", "B000000002"], { keepaEnabled: () => true }, q);
+    expect(r.job?.id).toBe(1);
+    expect(r.keepaJob?.id).toBe(2);
+    expect(inserts.map((p) => [p[8], p[0], p[4]])).toEqual([["refresh", "onboarding", ["B000000001", "B000000002"]], ["keepa", "onboarding", ["B000000001", "B000000002"]]]);
+    inserts.length = 0;
+    const off = await enqueueOnboardingJob(["B000000003"], { keepaEnabled: () => false }, q);
+    expect(off.keepaJob).toBeNull();
+    expect(inserts.map((p) => p[8])).toEqual(["refresh"]);
+    // the sites: every insert path enqueues through this helper and none builds a Keepa job by hand
+    const routes = readFileSync(join(__dirname, "..", "routes.ts"), "utf8");
+    expect(routes).not.toMatch(/kind: "keepa"/);
+    expect(readFileSync(join(__dirname, "components", "19-sales.ts"), "utf8")).not.toMatch(/keepa/i);
+  });
+
   it("every onboarding enqueue site goes through the dedup helper", () => {
     const routes = readFileSync(join(__dirname, "..", "routes.ts"), "utf8");
     const sales = readFileSync(join(__dirname, "components", "19-sales.ts"), "utf8");

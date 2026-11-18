@@ -206,9 +206,9 @@ export async function findRecentSameOnboarding(asins: readonly string[], query: 
 
 export async function enqueueOnboardingJob(
   asins: string[],
-  opts: { requestedBy?: number | null } = {},
+  opts: { requestedBy?: number | null; keepaEnabled?: () => boolean } = {},
   query: QueryLike = defaultQuery as any,
-): Promise<{ job: JobRow | null; enqueued: string[]; covered: string[]; duplicateOf?: number }> {
+): Promise<{ job: JobRow | null; enqueued: string[]; covered: string[]; duplicateOf?: number; keepaJob?: JobRow | null }> {
   const wanted = Array.from(new Set(asins.map((a) => String(a).trim().toUpperCase()).filter(Boolean)));
   if (wanted.length === 0) return { job: null, enqueued: [], covered: [] };
   const dup = await findRecentSameOnboarding(wanted, query);
@@ -218,7 +218,13 @@ export async function enqueueOnboardingJob(
   const covered = wanted.filter((a) => already.has(a));
   if (enqueued.length === 0) return { job: null, enqueued, covered };
   const job = await enqueueJob({ trigger: "onboarding", includeDaily: true, scopeAsins: enqueued, requestedBy: opts.requestedBy ?? null }, query);
-  return { job, enqueued, covered };
+  // Keepa (patch "Jobs" → New ASINs, commit 3, 2026-11-18): the SAME insert paths — Upload File, Sync Sourcing, the
+  // extension, SC discovery, Buy List promote, the sales import — all reach this helper, so this is the one enqueue
+  // point: ONE new-ASIN Keepa job (lane K) for the ASINs just inserted, at once. Only with a key; a failure here is
+  // logged by the caller's try and never stops the refresh job.
+  let keepaJob: JobRow | null = null;
+  if ((opts.keepaEnabled ?? (() => !!process.env.KEEPA_API_KEY))()) keepaJob = (await enqueueNewAsinKeepaJob(enqueued, query)).job;
+  return { job, enqueued, covered, keepaJob };
 }
 
 /** Per-component ledger row (refresh_runs), linked to the job. */
