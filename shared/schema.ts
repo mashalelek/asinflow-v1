@@ -673,13 +673,15 @@ export const DEFAULT_COLUMNS = [
   "fbaFee", "referralFee", "inboundShipping", "storage", "maxCogs",
   // Group 5 — Sellers
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
-  // Group 6 — Additional info
+  // Group 6 — Keepa (trend charts, 2026-11-18; docs/claude_spec-patch-keepa-trends.md)
+  "priceTrend", "salesVelocityTrend", "offerCount", "ratingCount",
+  // Group 7 — Additional info
   "tags", "notes", "promos", "sourcing", "leadSource", "meltable", "hazmat", "dg", "suppressed", "dateAdded", "lastReviewed", "priceAge", "submission", "status",
 ] as const;
 
 export type ColumnId = (typeof DEFAULT_COLUMNS)[number];
 
-export type ColumnGroup = "description" | "stock" | "actuals" | "estimates" | "sellers" | "additional";
+export type ColumnGroup = "description" | "stock" | "actuals" | "estimates" | "sellers" | "keepa" | "additional";
 
 export interface ColumnDef {
   id: ColumnId;
@@ -698,8 +700,14 @@ export const COLUMN_GROUPS: { key: ColumnGroup; label: string }[] = [
   { key: "actuals", label: "Actuals" },
   { key: "estimates", label: "Estimates" },
   { key: "sellers", label: "Sellers" },
+  { key: "keepa", label: "Keepa" },
   { key: "additional", label: "Additional Info" },
 ];
+
+/** The four Keepa trend columns (2026-11-18): charts, not values — never sorted, filtered or exported; the header carries "Keepa" as its muted line. */
+export const KEEPA_COLUMN_IDS = ["priceTrend", "salesVelocityTrend", "offerCount", "ratingCount"] as const;
+export type KeepaColumnId = (typeof KEEPA_COLUMN_IDS)[number];
+export const isKeepaColumn = (id: string): id is KeepaColumnId => (KEEPA_COLUMN_IDS as readonly string[]).includes(id);
 
 export const ALL_COLUMNS: ColumnDef[] = [
   // Group 1 — Description
@@ -762,7 +770,13 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { id: "sellers30d", label: "Sellers 30d \u0394", defaultVisible: false, align: "right", group: "sellers" },
   { id: "fba7d", label: "FBA 7d \u0394", defaultVisible: true, align: "right", group: "sellers" },
   { id: "fba30d", label: "FBA 30d \u0394", defaultVisible: false, align: "right", group: "sellers" },
-  // Group 6 — Additional info
+  // Group 6 — Keepa trend charts (docs/claude_spec-patch-keepa-trends.md; mockup docs/mockups/keepa-trends-2026-11-18.html).
+  // Visible by default; a saved column layout gains them once, visible (mergeStoredConfig), and hiding them sticks.
+  { id: "priceTrend", label: "Price Trend", defaultVisible: true, align: "left", group: "keepa" },
+  { id: "salesVelocityTrend", label: "Sales Velocity Trend", defaultVisible: true, align: "left", group: "keepa" },
+  { id: "offerCount", label: "Offer Count", defaultVisible: true, align: "left", group: "keepa" },
+  { id: "ratingCount", label: "Rating Count", defaultVisible: true, align: "left", group: "keepa" },
+  // Group 7 — Additional info
   { id: "tags", label: "Tags", defaultVisible: true, align: "left", group: "additional" },
   { id: "notes", label: "Notes", defaultVisible: true, align: "left", group: "additional" },
   { id: "promos", label: "Promos", defaultVisible: false, align: "left", group: "additional" },

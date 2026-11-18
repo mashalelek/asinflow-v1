@@ -1,0 +1,21 @@
+/* Keepa trend columns — the approved mockup's stylesheet, docs/mockups/keepa-trends-2026-11-18.html (Maria
+   2026-11-18). The mockup is the spec for the cells, header chips / toggles, the Trend range switch and the hover
+   popup, pixel for pixel: these rules are the mockup's, renamed with a kp- prefix and nothing else changed
+   (docs/UI_RULES.md "The mockup wins" — not restyled to quiet chrome). */
+.kp-lg{display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap}
+.kp-chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border:1px solid transparent;border-radius:11px;font:inherit;font-size:11px;font-weight:400;text-transform:none;letter-spacing:normal;background:none;color:inherit}
+span.kp-chip{padding-left:0}
+button.kp-chip{border-color:#3a3733;background:#22211e;cursor:pointer}
+button.kp-chip.off{color:#8f8b82!important;text-decoration:line-through}
+button.kp-chip.off .kp-dot{background:none!important;border:1.5px solid #8f8b82}
+.kp-dot{width:8px;height:8px;border-radius:50%;box-sizing:border-box;flex:none}
+.kp-sw{position:relative;cursor:crosshair}
+.kp-tip{position:fixed;z-index:9999;transform:translate(-50%,-100%);pointer-events:none;background:#2a2824;border:1px solid #3a3733;border-radius:6px;padding:6px 9px;display:flex;flex-direction:column;gap:2px;font-family:"JetBrains Mono",monospace;font-size:11px;line-height:15px;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.45);color:#e6e3dc}
+.kp-tip .kp-mut{color:#8f8b82}
+.kp-range{display:inline-flex;align-items:center;gap:16px}
+.kp-range .kp-mut{color:#8f8b82;font-size:13px}
+.kp-seg{display:inline-flex;border:1px solid #3a3733;border-radius:6px;overflow:hidden}
+.kp-seg button{height:30px;padding:0 12px;border:0;font:inherit;font-size:13px;cursor:pointer;background:#22211e;color:#a39f96}
+.kp-seg button.on{background:#3a3733;color:#e6e3dc}
+svg.kp-sp{display:block}
+svg.kp-sp path{fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke}

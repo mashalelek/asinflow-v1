@@ -23,7 +23,8 @@ import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { useSearch } from "wouter";
-import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { loadColumnConfig, saveColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
 import { JobsDialog } from "@/components/jobs-dialog";
 import { useJobs } from "@/hooks/use-jobs";
 import { enqueueRefresh, cancelJob, getJob, runningLabel, queuedLabel, completionText, changeCount, breakerHeldText, FOCUS_ASIN_EVENT, type Job } from "@/lib/jobs-api";
@@ -336,6 +337,8 @@ export default function Home() {
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);
+  // Keepa trend columns (2026-11-18): the Trend range switch and the header toggles, stored with the column config.
+  const keepa = useKeepaPrefs(columnConfig, (next) => { saveColumnConfig(next); setColumnConfig(next); });
   const [asins, setAsins] = useState<AsinInput[]>([]);
   const queuedJobIdsRef = useRef<number[]>([]);
   // ASINs the server could not create during an upload (insert_failed, 2026-11-09): named in one toast when the stream ends.
@@ -1914,6 +1917,7 @@ export default function Home() {
 
               <div className="flex items-center gap-2">
                 {/* Export moved to Row 1 (right group). The saved-views menu was removed 2026-11-18 (Maria); Columns is the only column control. */}
+                {keepa.visible && <KeepaRangeSwitch prefs={keepa.prefs} onPrefsChange={keepa.setPrefs} />}
                 <ColumnManager config={columnConfig} onChange={setColumnConfig} />
               </div>
             </div>
@@ -1941,6 +1945,7 @@ export default function Home() {
               priceSource={priceSource}
               settings={settings}
               columnConfig={columnConfig}
+              onKeepaPrefsChange={keepa.setPrefs}
               activeFilter={activeFilter}
               buySet={buySet}
               onHoldSet={onHoldSet}

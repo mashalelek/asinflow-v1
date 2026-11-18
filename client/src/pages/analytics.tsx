@@ -9,7 +9,8 @@ import { ResultsTable, getRowValue } from "@/components/results-table";
 import { GroupedTable, type GroupData } from "@/components/grouped-table";
 import { ColumnManager } from "@/components/column-manager";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
-import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { loadColumnConfig, readKeepaPrefs, DEFAULT_KEEPA_PREFS, type ColumnConfig } from "@/lib/columns";
+import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
 import { Sun, Moon, BarChart3, Search, X, Filter } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, saveShowParked, loadShowDead, saveShowDead } from "@/components/visibility-toggles";
@@ -85,14 +86,14 @@ function loadColConfig(): ColumnConfig {
     const s = localStorage.getItem(A_COL_CONFIG_KEY);
     if (s) {
       const p = JSON.parse(s);
-      return { order: p.order, visible: new Set(p.visible) };
+      return { order: p.order, visible: new Set(p.visible), keepa: readKeepaPrefs(p.keepa) };
     }
   } catch {}
   return loadColumnConfig(); // fall back to main table config
 }
 
 function saveColConfig(config: ColumnConfig) {
-  localStorage.setItem(A_COL_CONFIG_KEY, JSON.stringify({ order: config.order, visible: Array.from(config.visible) }));
+  localStorage.setItem(A_COL_CONFIG_KEY, JSON.stringify({ order: config.order, visible: Array.from(config.visible), keepa: config.keepa ?? DEFAULT_KEEPA_PREFS }));
 }
 
 function loadColFilters(): FilterMap {
@@ -174,6 +175,8 @@ export default function Analytics() {
     setColumnConfig(config);
     saveColConfig(config);
   }, []);
+  // Keepa trend columns (2026-11-18): prefs stored with this page's column config.
+  const keepa = useKeepaPrefs(columnConfig, handleColumnConfigChange);
 
   const handleSort = useCallback((colId: ColumnId) => {
     setSortCol(colId);
@@ -423,6 +426,7 @@ export default function Analytics() {
                   ))}
                 </div>
                 <ExportButtons results={sortedFilteredResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} />
+                {keepa.visible && <KeepaRangeSwitch prefs={keepa.prefs} onPrefsChange={keepa.setPrefs} />}
                 <ColumnManager config={columnConfig} onChange={handleColumnConfigChange} />
               </div>
             </div>
@@ -504,6 +508,7 @@ export default function Analytics() {
                 priceSource={priceSource}
                 settings={settings}
                 columnConfig={columnConfig}
+                onKeepaPrefsChange={keepa.setPrefs}
                 activeFilter="all"
                 buySet={new Set()}
                 onToggleBuy={() => {}}

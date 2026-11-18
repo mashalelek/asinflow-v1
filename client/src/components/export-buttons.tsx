@@ -8,6 +8,7 @@ import {
   ALL_COLUMNS,
 } from "@shared/schema";
 import { type ColumnConfig } from "@/lib/columns";
+import { isKeepaColumn } from "@shared/schema";
 import { getRowValue } from "./results-table";
 
 interface ExportButtonsProps {
@@ -58,6 +59,7 @@ function buildExportColumns(
   const cols: { id: string; label: string; getValue: (r: AsinResult, ps: PriceSource, s: Settings) => string | number | null }[] = [];
 
   for (const colId of visibleOrder) {
+    if (isKeepaColumn(colId)) continue; // a chart, not a value (Keepa trend columns, 2026-11-18)
     if (colId === "product") {
       // Expand the combined Product cell into sub-columns
       for (const sub of PRODUCT_SUB_COLUMNS) {

@@ -36,8 +36,12 @@ const DEFAULT_COL_WIDTHS: Partial<Record<ColumnId, number>> = {
   fbaFee: 85, referralFee: 95, inboundShipping: 100, prep: 85, storage: 105, maxCogs: 90,
   sellersFba: 85, sellers: 80, sellers7d: 85, sellers30d: 90, fba7d: 80, fba30d: 85,
   tags: 100, notes: 100, sourcing: 80, meltable: 85, hazmat: 80, dg: 70, suppressed: 90, dateAdded: 95, lastReviewed: 105,
+  // Keepa trend columns (2026-11-18): the mockup's grid widths (170 / 210 / 180 / 140).
+  priceTrend: 170, salesVelocityTrend: 210, offerCount: 180, ratingCount: 140,
 };
-import { type ColumnConfig } from "@/lib/columns";
+import { type ColumnConfig, type KeepaPrefs, DEFAULT_KEEPA_PREFS } from "@/lib/columns";
+import { KeepaTrendCell, KeepaHeaderChips, useKeepaTrends } from "@/components/keepa-trends";
+import { isKeepaColumn, type KeepaColumnId } from "@shared/schema";
 import { PackCell, packShown } from "@/components/pack-cell";
 import { type FilterMode } from "@/components/summary-cards";
 import { ColumnFilterButton, NUMERIC_COLS, type ColFilter, type FilterMap, type MultiSelectOption } from "@/components/column-filter";
@@ -331,6 +335,8 @@ interface ResultsTableProps {
   dateFilterCols?: Set<ColumnId>;
   /** Render the in-database tri-state filter on the Product column header (§21 Bulk Calc). */
   inDbFilterOnProduct?: boolean;
+  /** Keepa trend columns (2026-11-18): the header's New / New, FBA toggles write the prefs back (stored with the column config by the page). */
+  onKeepaPrefsChange?: (prefs: KeepaPrefs) => void;
 }
 
 // §18/§19 (2026-09-21). An unresolved ledger row means AF submitted an
@@ -595,7 +601,7 @@ export function ResultsTable({
   onBuyLinkSave,
   onDateAddedSave,
   dateFilterCols,
-  inDbFilterOnProduct,
+  inDbFilterOnProduct, onKeepaPrefsChange,
 }: ResultsTableProps) {
   const allResults = allResultsProp ?? results;
   const colMap = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
@@ -757,6 +763,12 @@ export function ResultsTable({
     return results;
   }, [results]);
 
+  // Keepa trend columns (2026-11-18): the bucketed trends of the rows on screen, fetched while any of the four is visible.
+  const keepaPrefs: KeepaPrefs = columnConfig.keepa ?? DEFAULT_KEEPA_PREFS;
+  const keepaOn = visibleCols.some((id) => isKeepaColumn(id));
+  const keepaAsins = useMemo(() => results.map((r) => r.asin), [results]);
+  const keepaTrends = useKeepaTrends(keepaAsins, keepaPrefs.range, keepaOn);
+
   if (results.length === 0) return null;
 
   const frozenColWidth = { rowNum: 36, sel: 32, cart: 32 };
@@ -870,6 +882,20 @@ export function ResultsTable({
               const col = colMap.get(colId)!;
               const isActive = sortCol === colId;
               const w = colWidths[colId] ?? DEFAULT_COL_WIDTHS[colId];
+              if (isKeepaColumn(colId)) {
+                // A chart column (docs/claude_spec-patch-keepa-trends.md; mockup keepa-trends-2026-11-18): never sorted or
+                // filtered; "Keepa" is the muted line above the label (the Actual / Estimated pattern); the chips name the lines.
+                return (
+                  <th key={colId} className="relative select-none px-2 py-2 text-xs font-medium text-left align-bottom" style={w ? { width: w, minWidth: w, maxWidth: w } : undefined} data-testid={`header-${colId}`}>
+                    <span className="flex flex-col leading-tight">
+                      <span className="text-[9px] opacity-60">Keepa</span>
+                      <span>{col.label}</span>
+                    </span>
+                    <KeepaHeaderChips cell={colId as KeepaColumnId} prefs={keepaPrefs} onPrefsChange={onKeepaPrefsChange} />
+                    <ResizeHandle onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, colId); }} />
+                  </th>
+                );
+              }
               return (
                 <th
                   key={colId}
@@ -982,7 +1008,9 @@ export function ResultsTable({
                   const col = colMap.get(colId)!;
                   const w = colWidths[colId] ?? DEFAULT_COL_WIDTHS[colId];
                   let content;
-                  if ((colId === "soldAs" || colId === "packSize") && onResultUpdate) {
+                  if (isKeepaColumn(colId)) {
+                    content = <KeepaTrendCell cell={colId as KeepaColumnId} asin={result.asin} trends={keepaTrends[result.asin]} prefs={keepaPrefs} />;
+                  } else if ((colId === "soldAs" || colId === "packSize") && onResultUpdate) {
                     content = <PackCell result={result} col={colId} onResultUpdate={onResultUpdate} />;
                   } else if (colId === "supplierSku" && onSupplierSkuSave) {
                     content = (

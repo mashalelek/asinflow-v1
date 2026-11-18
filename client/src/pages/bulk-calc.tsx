@@ -40,7 +40,8 @@ import {
   type AsinResult,
   type ColumnId,
   type Settings, type PriceSource } from "@shared/schema";
-import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { loadColumnConfig, saveColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
@@ -58,6 +59,8 @@ const BULK_COLUMN_IDS = new Set<ColumnId>([
   "estCogs", "prep", "salePrice", "profit", "roi", "margin",
   "fbaFee", "referralFee", "inboundShipping", "storage", "maxCogs",
   "sellersFba", "sellers", "sellers7d", "sellers30d", "fba7d", "fba30d",
+  // Keepa trend columns (Maria 2026-11-18: on every table whose rows are ASINs); a list ASIN with no Keepa history is an empty cell.
+  "priceTrend", "salesVelocityTrend", "offerCount", "ratingCount",
   // tags + promos + notes are BULK-LOCAL fields (§21, 2026-09-04 / notes
   // 2026-09-08) — free text on the bulk row, unrelated to the main page's.
   "tags", "promos", "notes", "meltable", "hazmat", "suppressed", "dateAdded", "lastReviewed",
@@ -167,6 +170,8 @@ export default function BulkCalc() {
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(
     () => loadColumnConfig(BULK_COLUMNS_KEY, BULK_COLUMNS),
   );
+  // Keepa trend columns (2026-11-18): Bulk Calc keeps its own prefs, under its own key.
+  const keepa = useKeepaPrefs(columnConfig, (next) => { saveColumnConfig(next, BULK_COLUMNS_KEY); setColumnConfig(next); });
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // §21 settings-drift fix (2026-09-09): SAME key as the ASINs page
@@ -782,6 +787,7 @@ export default function BulkCalc() {
           <History className="h-3.5 w-3.5" />
         </Button>
         <ExportButtons results={exportResults} priceSource={priceSource} settings={settings} columnConfig={columnConfig} filename={exportFilename} includeSkuSubColumn={false} includeInboundShipping={includeInboundShipping} />
+        {keepa.visible && <KeepaRangeSwitch prefs={keepa.prefs} onPrefsChange={keepa.setPrefs} />}
         <ColumnManager config={columnConfig} onChange={setColumnConfig} columns={BULK_COLUMNS} storageKey={BULK_COLUMNS_KEY} />
       </div>
 
@@ -830,6 +836,7 @@ export default function BulkCalc() {
           onSort={handleSort}
           onResultUpdate={(asin, updates) => setResults((prev) => prev.map((r) => (r.asin === asin ? { ...r, ...updates } : r)))}
           columns={BULK_COLUMNS}
+          onKeepaPrefsChange={keepa.setPrefs}
           productBadge={productBadge}
           cogsSaveUrl={cogsSaveUrl}
           onSupplierSkuSave={onSupplierSkuSave}

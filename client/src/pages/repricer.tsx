@@ -6,7 +6,8 @@ import { ColumnManager } from "@/components/column-manager";
 import { ExportButtons } from "@/components/export-buttons";
 import { matchesFilters, type ColFilter, type FilterMap } from "@/components/column-filter";
 import { Button } from "@/components/ui/button";
-import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { loadColumnConfig, saveColumnConfig, type ColumnConfig } from "@/lib/columns";
+import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
 import { loadSettings, loadIncludeInbound, loadPriceSource } from "@/lib/settings";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { ALL_COLUMNS, type AsinResult, type ColumnId, type PriceSource, type Settings } from "@shared/schema";
@@ -102,6 +103,8 @@ export default function Repricer() {
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(
     () => loadColumnConfig(REPRICER_COLUMNS_KEY, ALL_COLUMNS),
   );
+  // Keepa trend columns (2026-11-18): the Repricer tab keeps its own prefs, under its own key.
+  const keepa = useKeepaPrefs(columnConfig, (next) => { saveColumnConfig(next, REPRICER_COLUMNS_KEY); setColumnConfig(next); });
   const [buySet, setBuySet] = useState<Set<string>>(loadBuyList);
   const [onHoldSet, setOnHoldSet] = useState<Set<string>>(loadOnHoldList);
   const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
@@ -214,6 +217,7 @@ export default function Repricer() {
           filename="repricer-zero-sales.csv"
           includeInboundShipping={includeInboundShipping}
         />
+        {keepa.visible && <KeepaRangeSwitch prefs={keepa.prefs} onPrefsChange={keepa.setPrefs} />}
         <ColumnManager config={columnConfig} onChange={setColumnConfig} columns={ALL_COLUMNS} storageKey={REPRICER_COLUMNS_KEY} />
       </div>
 
@@ -297,6 +301,7 @@ export default function Repricer() {
           onFilterApply={(f: ColFilter) => setColFilters((prev) => ({ ...prev, [f.colId]: f }))}
           onFilterClear={(colId) => setColFilters((prev) => { const n = { ...prev }; delete n[colId]; return n; })}
           columns={ALL_COLUMNS}
+          onKeepaPrefsChange={keepa.setPrefs}
         />
       )}
     </div>

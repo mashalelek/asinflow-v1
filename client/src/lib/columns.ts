@@ -1,4 +1,5 @@
 import { type ColumnDef, type ColumnId, ALL_COLUMNS, DEFAULT_COLUMNS } from "@shared/schema";
+import type { KeepaRange } from "@shared/keepa";
 
 const COLUMNS_KEY = "fba-column-config";
 
@@ -23,9 +24,25 @@ export function reorderStock(order: ColumnId[]): ColumnId[] {
   return order.map((id) => (isStock.has(id) ? queue.shift()! : id));
 }
 
+/**
+ * The Keepa trend columns' per-user settings (docs/claude_spec-patch-keepa-trends.md "Header and columns",
+ * 2026-11-18): the Trend range switch and the two header toggles, stored WITH the table's column config (so the
+ * Repricer tab and Bulk Calc keep their own, under their keys).
+ */
+export interface KeepaPrefs { range: KeepaRange; showNew: boolean; showFba: boolean }
+export const DEFAULT_KEEPA_PREFS: KeepaPrefs = { range: "1y", showNew: true, showFba: true };
+export function readKeepaPrefs(raw: any): KeepaPrefs {
+  return {
+    range: raw?.range === "all" ? "all" : "1y",
+    showNew: raw?.showNew !== false,
+    showFba: raw?.showFba !== false,
+  };
+}
+
 export interface ColumnConfig {
   order: ColumnId[];
   visible: Set<ColumnId>;
+  keepa?: KeepaPrefs;
 }
 
 export function loadColumnConfig(
@@ -37,6 +54,7 @@ export function loadColumnConfig(
     if (stored) {
       const parsed = JSON.parse(stored);
       const config = mergeStoredConfig(parsed, columns);
+      config.keepa = readKeepaPrefs(parsed.keepa);
       // One-time Stock reorder (2026-11-07), saved so it runs once per stored config.
       if (parsed.stockOrderV !== STOCK_ORDER_V) {
         config.order = reorderStock(config.order);
@@ -95,6 +113,7 @@ export function saveColumnConfig(config: ColumnConfig, key: string = COLUMNS_KEY
       order: config.order,
       visible: Array.from(config.visible),
       stockOrderV: STOCK_ORDER_V,
+      keepa: config.keepa ?? DEFAULT_KEEPA_PREFS,
     })
   );
 }
@@ -105,5 +124,6 @@ export function getDefaultConfig(columns: ColumnDef[] = ALL_COLUMNS): ColumnConf
     visible: new Set(
       columns.filter((c) => c.defaultVisible).map((c) => c.id)
     ),
+    keepa: { ...DEFAULT_KEEPA_PREFS },
   };
 }
