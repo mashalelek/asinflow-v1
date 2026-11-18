@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ASINs — Keepa trend columns (approved mockup 2026-11-18)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px}
+.num{font-family:"JetBrains Mono",monospace}
+.mut{color:#8f8b82}
+.cols{display:grid;grid-template-columns:28px minmax(240px,1fr) 96px 72px 170px 210px 180px 140px;gap:18px;align-items:center}
+.row{padding:9px 12px;border-top:1px solid #2a2824}
+.row:hover{background:#1f1e1b}
+.hd{padding:10px 12px 8px;align-items:end}
+.hl{color:#8f8b82;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.gl{color:#8f8b82;font-size:10px;margin-bottom:2px}
+.lg{display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border:1px solid transparent;border-radius:11px;font:inherit;font-size:11px;background:none}
+span.chip{padding-left:0}
+button.chip{border-color:#3a3733;background:#22211e;cursor:pointer}
+button.chip.off{color:#8f8b82!important;text-decoration:line-through}
+button.chip.off .dot{background:none!important;border:1.5px solid #8f8b82}
+.dot{width:8px;height:8px;border-radius:50%;box-sizing:border-box}
+.sw{position:relative;cursor:crosshair}
+.tip{position:absolute;bottom:calc(100% + 6px);transform:translateX(-50%);z-index:5;pointer-events:none;background:#2a2824;border:1px solid #3a3733;border-radius:6px;padding:6px 9px;display:none;flex-direction:column;gap:2px;font-size:11px;line-height:15px;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.45)}
+.chk{width:16px;height:16px;border:1px solid #5a564f;border-radius:4px;background:#1b1a18}
+.seg{display:inline-flex;border:1px solid #3a3733;border-radius:6px;overflow:hidden}
+.seg button{height:30px;padding:0 12px;border:0;font:inherit;cursor:pointer;background:#22211e;color:#a39f96}
+.seg button.on{background:#3a3733;color:#e6e3dc}
+svg.sp{display:block}
+svg.sp path{fill:none;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+/* line colors: the spec for the real columns */
+:root{--bb:#ff4fb0;--new:#8f8ac4;--sold:#f5d21f;--rank:#7dba7d;--off:#a3a8ff;--fba:#f0713a;--rate:#a9c23f;--cross:#5a564f}
+</style>
+</head>
+<body>
+<div style="min-height:760px;display:flex;flex-direction:column">
+  <div style="display:flex;align-items:center;gap:22px;padding:12px 24px;border-bottom:1px solid #2a2824;color:#a39f96;flex-wrap:wrap">
+    <span style="color:#e6e3dc;font-weight:600">AsinFlow</span><span>Dashboard</span><span style="color:#e6e3dc;border-bottom:2px solid #d8b56a;padding-bottom:2px">ASINs</span><span>Bulk Calc</span><span>ASIN Analytics</span><span>POs</span><span>Claims</span><span>Subscriptions</span><span>Repricer</span>
+  </div>
+  <div style="padding:20px 24px 12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <h1 style="margin:0;font-size:22px;font-weight:600">ASINs</h1>
+    <span class="mut">2,453 ASINs</span>
+    <span style="flex:1"></span>
+    <span class="mut">Trend range</span>
+    <span class="seg" role="group" aria-label="Trend range">
+      <button id="r1y" class="on">1 year</button><button id="rall">All</button>
+    </span>
+  </div>
+  <div style="overflow-x:auto;padding:0 12px 24px">
+    <div style="min-width:1260px">
+      <div class="cols hd">
+        <span></span>
+        <span class="hl">Product</span>
+        <div><div class="gl">Estimated</div><div class="hl">Sale Price</div></div>
+        <div><div class="gl">Estimated</div><div class="hl">ROI</div></div>
+        <div><div class="gl">Keepa</div><div class="hl">Price Trend</div>
+          <div class="lg"><span class="chip" style="color:var(--bb)"><span class="dot" style="background:var(--bb)"></span>Buy Box</span>
+          <button id="tNew" class="chip" aria-pressed="true" style="color:var(--new)"><span class="dot" style="background:var(--new)"></span>New</button></div></div>
+        <div><div class="gl">Keepa</div><div class="hl">Sales Velocity Trend</div>
+          <div class="lg"><span class="chip" style="color:var(--sold)"><span class="dot" style="background:var(--sold)"></span>Monthly Sold</span>
+          <span class="chip" style="color:var(--rank)"><span class="dot" style="background:var(--rank)"></span>Sales Rank</span></div></div>
+        <div><div class="gl">Keepa</div><div class="hl">Offer Count</div>
+          <div class="lg"><span class="chip" style="color:var(--off)"><span class="dot" style="background:var(--off)"></span>New</span>
+          <button id="tFba" class="chip" aria-pressed="true" style="color:var(--fba)"><span class="dot" style="background:var(--fba)"></span>New, FBA</button></div></div>
+        <div><div class="gl">Keepa</div><div class="hl">Rating Count</div>
+          <div class="lg"><span class="chip" style="color:var(--rate)"><span class="dot" style="background:var(--rate)"></span>Rating Count</span></div></div>
+      </div>
+      <div id="rows"></div>
+    </div>
+  </div>
+</div>
+<script>
+// Sample data only. What matters for the build: markup, CSS, colors, bucketing (14), scales, hover.
+var S = { range: '1y', showNew: true, showFba: true }, H = 36, B = 14;
+function rng(seed){var a=seed>>>0;return function(){a=(a+0x6D2B79F5)>>>0;var t=a;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296;};}
+var cfg=[
+ {title:'Red Heart Super Saver Yarn 3-Pack, Latte Stripe',asin:'B08G6J2PY5',price:'$25.31',roi:'41.2%',base:24,off:8,frac:.45,rank:150000,sold:1,soldNull:[262,360],rating:196},
+ {title:'Caress Body Wash 2-pk',asin:'B006T0U4R4',price:'$18.94',roi:'36.5%',base:19,off:12,frac:.6,rank:42000,sold:3,rating:2140},
+ {title:'Folgers Instant Coffee 8 oz',asin:'B000FDBYSE',price:'$14.49',roi:'28.0%',base:14.5,off:6,frac:.5,rank:18000,sold:5,bbNull:[346,360],rating:8820},
+ {title:'Havalon 60XT Stainless Steel Blades, Box of 100',asin:'B00D79EODK',price:'$84.00',roi:'52.3%',base:82,off:4,frac:.5,rank:61000,sold:2,bbNull:[268,306],rating:1312},
+ {title:'Golden Malted Waffle Mix 33 oz',asin:'B0BNW2Q8TT',price:'$21.75',roi:'33.1%',base:22,off:3,frac:.34,rank:null,sold:null,rating:12},
+ {title:'Vinegar Jars, 12-Jar Case',asin:'B0C9F1Y7PQ',price:'$46.20',roi:'47.8%',base:45,off:5,frac:0,rank:210000,sold:null,bbNull:[250,256],rating:64},
+ {title:'Oreo Chocolate Sandwich Cookies, Family Size',asin:'B07Q4RXG2Z',price:'$9.98',roi:'22.4%',base:10,off:16,frac:.7,rank:3200,sold:7,rating:31560},
+ {title:'Red Heart Super Saver Yarn, Cherry Red',asin:'B07N6V47HC',price:'$11.25',roi:'38.9%',base:11,off:9,frac:.55,rank:95000,sold:2,rating:5403}];
+var BK=[50,100,200,300,400,500,700,1000,2000];
+var DATA=cfg.map(function(c,k){var r=rng(1000+k*7919),nw=[],bb=[],off=[],fba=[],rank=[],sold=[],rate=[];
+ var p=c.base,o=c.off,adj=0,rk=c.rank,sb=c.sold,rt=Math.round(c.rating*.82),prem=0;
+ for(var i=0;i<360;i++){
+  if(r()>.9)p=Math.max(c.base*.7,Math.min(c.base*1.25,p+(r()-.5)*c.base*.08));nw.push(Math.round(p*100)/100);
+  if(r()>.7)prem=r()<.45?r()*c.base*.07:0;
+  bb.push(c.bbNull&&i>=c.bbNull[0]&&i<c.bbNull[1]?null:Math.round((p+prem)*100)/100);
+  if(r()>.9)o=Math.max(1,Math.min(22,o+(r()<.5?-1:1)*(r()<.2?2:1)));off.push(o);
+  if(r()>.93)adj=r()<.5?-1:(r()<.5?1:0);
+  fba.push(Math.max(0,Math.min(o,Math.round(o*c.frac)+(c.frac?adj:0))));
+  if(c.rank==null)rank.push(null);else{rk=Math.max(c.rank*.25,rk*.82+c.rank*.18+(r()-.5)*c.rank*.7);rank.push(Math.round(rk));}
+  if(c.sold==null)sold.push(null);else{if(r()>.975)sb=Math.max(0,Math.min(BK.length-1,sb+(r()<.5?-1:1)));sold.push(c.soldNull&&i>=c.soldNull[0]&&i<c.soldNull[1]?null:BK[sb]);}
+  if(r()<.18)rt+=Math.ceil(r()*Math.max(1,c.rating/600));rate.push(rt);}
+ return{c:c,nw:nw,bb:bb,off:off,fba:fba,rank:rank,sold:sold,rate:rate};});
+// 14 equal buckets; a bucket is the mean of its non-null days, or a gap when fewer than half its days have data
+function bucket(v,n){var out=[];for(var b=0;b<n;b++){var s=Math.floor(b*v.length/n),e=Math.floor((b+1)*v.length/n),sum=0,cnt=0;for(var i=s;i<e;i++)if(v[i]!=null){sum+=v[i];cnt++;}out.push(cnt*2>=(e-s)&&cnt>0?sum/cnt:null);}return out;}
+function path(v,lo,hi,W){var dx=W/(v.length-1),d='',pen=false,span=(hi-lo)||1;for(var i=0;i<v.length;i++){if(v[i]==null){pen=false;continue;}var x=(i*dx).toFixed(1),y=(H-3-((v[i]-lo)/span)*(H-6)).toFixed(1);d+=(pen?'L':'M')+x+' '+y;pen=true;}return d||'M0 0';}
+function ext(arrs){var lo=Infinity,hi=-Infinity;arrs.forEach(function(a){a.forEach(function(v){if(v!=null){if(v<lo)lo=v;if(v>hi)hi=v;}});});return lo===Infinity?[0,1]:[lo,hi];}
+var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function usd(v){return v==null?'—':'$'+v.toFixed(2);} function int(v){return v==null?'—':v.toLocaleString('en-US');}
+var RAW=[];
+function cell(k,col,W,paths){return '<div class="sw" data-k="'+k+'" data-col="'+col+'" style="width:'+W+'px"><svg class="sp" width="'+W+'" height="36" viewBox="0 0 '+W+' 36" preserveAspectRatio="none"><path class="x" d="M0 0" stroke="var(--cross)" stroke-width="1"></path>'+paths+'</svg><div class="tip num"></div></div>';}
+function render(){RAW=[];
+ document.getElementById('rows').innerHTML=DATA.map(function(d,k){
+  var cut=function(a){return S.range==='1y'?a.slice(-120):a;};
+  var raw={nw:cut(d.nw),bb:cut(d.bb),off:cut(d.off),fba:cut(d.fba),rank:cut(d.rank),sold:cut(d.sold),rate:cut(d.rate)};RAW.push(raw);
+  var nw=bucket(raw.nw,B),bb=bucket(raw.bb,B),off=bucket(raw.off,B),fba=bucket(raw.fba,B),rank=bucket(raw.rank,B),sold=bucket(raw.sold,B),rate=bucket(raw.rate,B);
+  var pe=ext([nw,bb]),pad=(pe[1]-pe[0])*.1||1,oe=ext([off]),re=ext([rank]),se=ext([sold]),te=ext([rate]);
+  return '<div class="cols row"><span class="chk"></span><span>'+d.c.title+'<br><span class="mut num">'+d.c.asin+'</span></span><span class="num">'+d.c.price+'</span><span class="num">'+d.c.roi+'</span>'+
+   cell(k,'p',150,(S.showNew?'<path d="'+path(nw,pe[0]-pad,pe[1]+pad,150)+'" stroke="var(--new)" stroke-width="1.25"></path>':'')+'<path d="'+path(bb,pe[0]-pad,pe[1]+pad,150)+'" stroke="var(--bb)" stroke-width="1.5"></path>')+
+   cell(k,'v',150,'<path d="'+path(rank,re[0],re[1],150)+'" stroke="var(--rank)" stroke-width="1.25"></path><path d="'+path(sold,0,se[1]*1.2,150)+'" stroke="var(--sold)" stroke-width="1.75"></path>')+
+   cell(k,'o',150,(S.showFba?'<path d="'+path(fba,0,oe[1]*1.1,150)+'" stroke="var(--fba)" stroke-width="1.25"></path>':'')+'<path d="'+path(off,0,oe[1]*1.1,150)+'" stroke="var(--off)" stroke-width="1.5"></path>')+
+   cell(k,'r',120,'<path d="'+path(rate,te[0]-(te[1]-te[0])*.3,te[1],120)+'" stroke="var(--rate)" stroke-width="1.5"></path>')+'</div>';}).join('');}
+function line(color,text){return '<span style="color:var(--'+color+')">'+text+'</span>';}
+document.getElementById('rows').addEventListener('mousemove',function(e){var sw=e.target.closest('.sw');if(!sw)return;
+ var raw=RAW[+sw.dataset.k],n=raw.nw.length,r=sw.getBoundingClientRect(),i=Math.max(0,Math.min(n-1,Math.round((e.clientX-r.left)/r.width*(n-1))));
+ var t=new Date(2026,10,18-(n-1-i)*3),h='<span class="mut">'+MON[t.getMonth()]+' '+t.getDate()+', '+t.getFullYear()+'</span>',c=sw.dataset.col;
+ if(c==='p')h+=line('bb','Buy Box '+usd(raw.bb[i]))+(S.showNew?line('new','New '+usd(raw.nw[i])):'');
+ if(c==='v')h+=line('sold','Monthly Sold '+(raw.sold[i]==null?'—':int(raw.sold[i])+'+'))+line('rank','Sales Rank '+(raw.rank[i]==null?'—':'#'+int(raw.rank[i])));
+ if(c==='o')h+=line('off','New '+int(raw.off[i]))+(S.showFba?line('fba','New, FBA '+int(raw.fba[i])):'');
+ if(c==='r')h+=line('rate','Rating Count '+int(raw.rate[i]));
+ var tip=sw.querySelector('.tip');tip.innerHTML=h;tip.style.display='flex';tip.style.left=(i/(n-1)*100).toFixed(1)+'%';
+ sw.querySelector('.x').setAttribute('d','M'+(i/(n-1)*r.width).toFixed(1)+' 0V36');});
+document.getElementById('rows').addEventListener('mouseout',function(e){var sw=e.target.closest('.sw');if(!sw||sw.contains(e.relatedTarget))return;sw.querySelector('.tip').style.display='none';sw.querySelector('.x').setAttribute('d','M0 0');});
+function setRange(v){S.range=v;document.getElementById('r1y').className=v==='1y'?'on':'';document.getElementById('rall').className=v==='all'?'on':'';render();}
+document.getElementById('r1y').onclick=function(){setRange('1y');};document.getElementById('rall').onclick=function(){setRange('all');};
+function tog(id,key){var b=document.getElementById(id);b.onclick=function(){S[key]=!S[key];b.classList.toggle('off',!S[key]);b.setAttribute('aria-pressed',S[key]);render();};}
+tog('tNew','showNew');tog('tFba','showFba');render();
+</script>
+</body>
+</html>

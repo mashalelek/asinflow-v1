@@ -281,7 +281,7 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
 
 ## 6. Column Structure
 
-### Six groups (canonical order)
+### Seven groups (canonical order)
 
 1. **Description** — Product, Category, Brand, Supplier, Buy Link, SKU / UPC
 2. **Stock** — Stock, Available (FBA), On Order, At Prep, **FBA Stock**,
@@ -295,7 +295,9 @@ representations of the same logical "narrow to specific ASIN(s)" intent.
    Max COGS
 5. **Sellers** — Sellers (FBA), Sellers (combined), Sellers 7d Δ, Sellers 30d Δ,
    FBA 7d Δ, FBA 30d Δ
-6. **Additional info** — Tags, Notes, Promos, Sourcing, Meltable, Hazmat,
+6. **Keepa** (2026-11-18) — Price Trend, Sales Velocity Trend, Offer Count,
+   Rating Count — trend charts, see "Keepa trend columns" below
+7. **Additional info** — Tags, Notes, Promos, Sourcing, Meltable, Hazmat,
    Suppressed, Date Added, Last Reviewed, Price Age, Status (2026-09-07:
    active/parked/dead + reason; default hidden; multi-select filter),
    Submission
@@ -733,6 +735,65 @@ between frozen and scrollable areas.
 The `#` column shows position within the current filtered/sorted view (1 to N
 where N = total filtered count). Persists across pagination. Updates when
 sort/filter change. Non-sortable, non-filterable.
+
+### Keepa trend columns (2026-11-18)
+
+Built from `docs/claude_spec-patch-keepa-trends.md` (Maria 2026-11-18; spike
+`docs/keepa-spike-2026-11-18.md`). **The approved mockup
+`docs/mockups/keepa-trends-2026-11-18.html` is the spec** for the four cells,
+the header chips and toggles, the Trend range switch and the hover popup —
+layout, wording and look; its stylesheet is `client/src/components/keepa-trends.css`
+(kp- prefixed, otherwise verbatim), its script is `client/src/components/keepa-trends.tsx`.
+
+Four columns, a new group **Keepa** after Sellers, each a small trend chart
+drawn from Keepa's own history (the years before an ASIN entered AF included):
+
+| Column | Lines (first listed drawn on top) | Header toggle |
+|---|---|---|
+| Price Trend | Buy Box `#ff4fb0` 1.5 · New `#8f8ac4` 1.25 | New |
+| Sales Velocity Trend | Monthly Sold `#f5d21f` 1.75 · Sales Rank `#7dba7d` 1.25 | — |
+| Offer Count | New `#a3a8ff` 1.5 · New, FBA `#f0713a` 1.25 | New, FBA |
+| Rating Count | Rating Count `#a9c23f` 1.5 | — |
+
+- **Where:** every table whose rows are ASINs — ASINs, Bulk Calc, Repricer,
+  ASIN Analytics (Maria 2026-11-18: Bulk Calc in). Visible by default; a saved
+  column layout gains them once, visible, and hiding them sticks. "Keepa" is
+  the header's muted line (the Actual / Estimated pattern); the chips under
+  the label name the lines in their colors. Charts, not values: never
+  sorted, filtered or exported.
+- **Range:** `1 year | All` in the table toolbar while a Keepa column is
+  visible. 1 year = the 365 days ending today (ET); All = the ASIN's earliest
+  stored Keepa day to today. Default 1 year.
+- **Trend line:** the range cut into 14 equal time buckets, a bucket = the
+  mean of its daily values, straight segments between buckets. **Gaps:** a
+  bucket with data on fewer than half its days, and the days before a series
+  begins, are gaps — the line stops and resumes, nothing is drawn across,
+  never zero.
+- **Scales** (per cell, per ASIN, from the bucket values; `server/keepa-trends.ts`,
+  the ONE place the math lives): Buy Box and New share min..max over both
+  padded 10%; Monthly Sold 0..max × 1.2; Sales Rank min..max with the larger
+  rank plotted higher (Keepa's convention); New and New, FBA share
+  0..max(New) × 1.1; Rating Count min − 30% of span..max. A header toggle
+  hides a line and its popup row in every row and never moves the other line
+  (the server computes the scale over both).
+- **Hover:** a thin vertical marker and a popup above it — the date
+  (`Mar 4, 2026`) and one row per visible line in its color with that day's
+  STORED value (`Buy Box $25.31` · `New $25.28` · `Monthly Sold 50+` ·
+  `Sales Rank #175,887` · `New 7` · `New, FBA 3` · `Rating Count 222`; `—`
+  when none), read from `GET /api/keepa/history/:asin` on first hover and
+  cached for the page session. The popup is a fixed-position portal, so the
+  table's scroll box never clips it.
+- **Stored per user** with the table's column config (`keepa: {range,
+  showNew, showFba}` in `fba-column-config`; Bulk Calc, the Repricer tab and
+  Analytics under their own keys).
+- **Data:** `GET /api/keepa/trends?asins=…&range=1y|all` for the rows on
+  screen (the 14 bucket values and the scale bounds per series), from
+  `keepa_series` (§11 "Keepa jobs (lane K)", §14). A cell with no data is
+  empty.
+- **Out of scope:** sorting / filtering / alerts on these columns, Keepa in
+  profit math, the repricer or the Sellers columns, the Product cell's
+  existing Keepa hover graph (the public `graph.keepa.com` image, no key, no
+  tokens — checked 2026-11-18), email on an incomplete daily job.
 
 ### Column configuration (view presets removed 2026-11-18)
 
@@ -2326,6 +2387,7 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 28 | Subscription alerts (§27, 2026-10-31) | daily | none (AF tables) | `28_subscriptions` | every subscription; "Subscription renews" raised / cleared; **00:00 pass only**, after 27 |
 | 29 | PO documents (§22 "PO documents", 2026-11-04) | hourly | Gmail API (orders@) + Drive API (Invoices root, as Maria) + headless Chromium | `29_po_documents` | order-confirmation / shipped / delivered mail since the watermark, rendered to PDF and saved to Drive; every pass also links PDFs saved by hand (D1; the 00:00 pass only until 2026-11-05); a document not saved fails the component (2026-11-05); **scheduled passes only** (00:00 and hourly), after 28; manual: `npm run po-docs` |
 | 30 | Claim timers + auto-found claims (§22 "Supplier claims" D7 / D8 / §3.1, 2026-11-11 / 2026-11-12) | hourly | AF tables · Gmail list/get (cancellation emails) · Haiku for free text | `30_claim_timers` | `sweepClaimTimers`: every open claim with no open task whose 5-business-day timer ran out gets `follow_up_supplier` / `check_on_it` with the reason, once — so the POs list's Claims column and the Dashboard never lag behind the Claims page (whose load runs the same sweep); then `sweepReplacements` (commit 8, §3.13 rows 3–6: the PO's new tracking tied to the claim, a reship proposed under a new order #, arrived on Velocity's count, a home delivery noted), `sweepSuggestions` (missing per D8, never_received) and `ingestCancellations` (cancellation emails since the watermark → suggested canceled claims) — **suggestions only**, nothing changes a PO until Maria opens one — then `ingestClaimEmails` (commit 6, §3.11: the watched mailboxes' refund / credit confirmations, replies, return labels (commit 7) and Maria's own emails applied to their claims; a mailbox with no watermark is left alone until its first live backfill); the Dashboard's write-off cells (commit 9) read the claims this pass maintains; **scheduled passes only**, after 29 |
+| 33 | Keepa history (`docs/claude_spec-patch-keepa-trends.md`, 2026-11-18) | daily (Keepa jobs only) | Keepa `GET /product`, ≤ 20 ASINs, `buybox=1&rating=1`, never `offers` | `33_keepa` | **Keepa jobs only, lane K** — the daily job: active + parked; a new-ASIN job: the ASINs just inserted; never in a scheduled pass, a Refresh, an onboarding or bulk job (31 / 32 carrier tracking are in §26) |
 
 Dependencies the order encodes: 10 before 13 (fees need the fresh price)
 (9 before 15 was retired 2026-10-17 — the inventory snapshot's ordered_qty
@@ -2617,16 +2679,19 @@ migrations and `registerRoutes` (it needs the injected
 `onboardScDiscoveries` and `syncAsinCostsFromPos`), whenever `SP_API_SELLER_ID`
 is set — the runner is always on; only the **schedule** is gated.
 
-- **Two lanes, one loop each** (Maria, 2026-10-16: manual actions never
-  wait on the scheduled pass). Lane S claims `trigger = 'scheduled'`; lane
-  M claims `trigger IN ('manual','onboarding','bulk')` in queue order. Each
+- **Three lanes, one loop each** (Maria, 2026-10-16: manual actions never
+  wait on the scheduled pass; lane K added 2026-11-18). Lane S claims
+  `kind = 'refresh' AND trigger = 'scheduled'`; lane M claims `kind =
+  'refresh' AND trigger IN ('manual','onboarding','bulk')` in queue order;
+  lane K claims `kind = 'keepa'` (a queued new-ASIN job ahead of a queued
+  daily job) — see "Keepa jobs (lane K)" below. Each
   loop: claim its lane's oldest `queued` job (`SELECT … FOR UPDATE SKIP
   LOCKED`, that lane's `running` job first — that is resume, and both
-  lanes resume on boot), run it, repeat; idle poll 5 s. Both lanes run
+  lanes resume on boot), run it, repeat; idle poll 5 s. All lanes run
   concurrently in the same process, so a lane M job starts the moment it
-  is enqueued when lane M is idle; within a lane, one job at a time. Two
+  is enqueued when lane M is idle; within a lane, one job at a time. Three
   `running` rows are normal. Advisory lock `7342002` (one per process)
-  guards the zero-downtime deploy overlap for both lanes.
+  guards the zero-downtime deploy overlap for every lane.
 - **Onboarding jobs run the per-ASIN components only** — 2–8 and 10–17 for
   their scope, never the account-wide 1, 9, 18, 19–21, which belong to the
   pass or a manual Refresh. This is what stops an onboarding job from
@@ -2703,11 +2768,72 @@ is set — the runner is always on; only the **schedule** is gated.
   that run a subset of the sequence — the sales history backfill uses it.
 
   **Rule (Maria, 2026-10-16): manual actions never wait on the scheduled
-  pass. Only SP-API refresh work goes on the queue.** Export SB
+  pass. Only SP-API refresh work goes on lanes S and M; Keepa on lane K
+  (2026-11-18).** Export SB
   COGS, Update COGS in SC, Push to Aura, Verify now, Recheck now,
   Park/Unpark/Mark dead/Revive stay direct calls. Sync Sourcing and Upload
   File keep their inline sheet/CSV step; only the onboarding Refresh they
   spawn is a queue job.
+
+#### Keepa jobs (lane K, 2026-11-18)
+
+`docs/claude_spec-patch-keepa-trends.md` "Fetching: lane K"; migration 121;
+`server/keepa.ts` is the ONLY module that calls `api.keepa.com`. Keepa is a
+different API writing different tables (`keepa_series`, `keepa_fetch`), so
+Keepa jobs (`jobs.kind = 'keepa'`) run on their own lane K beside S and M,
+one at a time, and a Keepa job waiting for tokens holds nothing up.
+**Component 33 runs only in Keepa jobs** (the patch's "25" is PO tracking
+ingest in the code; 33 is the next free number): `planFor` gives a Keepa job
+component 33 alone and strips it from every refresh job — scheduled passes,
+the Refresh button, onboarding, Bulk Calc, an explicit `components` list.
+
+- **Daily job** — the 00:00 ET tick (`runKeepaDailyTick`, separate from the
+  refresh tick) enqueues `kind keepa, trigger scheduled, scope NULL` (active +
+  parked); none while the previous one is queued or running; none without
+  `KEEPA_API_KEY`.
+- **New-ASIN job** — `enqueueOnboardingJob` (the one enqueue point every
+  insert path reaches: Upload File, Sync Sourcing, the extension, SC
+  discovery, Buy List promote, the sales import) enqueues ONE `kind keepa,
+  trigger onboarding` job for the ASINs just inserted, at once. Lane K
+  claims it ahead of a queued daily job; a RUNNING daily job runs queued
+  new-ASIN jobs inline between its batches (`runQueuedNewAsinJobs`), each
+  with its own ledger row and summary.
+- **Running:** scope ordered never-fetched first, then oldest
+  `keepa_fetch.fetched_at`; an ASIN fetched since the job's threshold (the
+  daily job: 00:00 ET today; a new-ASIN job: when it was queued) is `not_due`
+  — that rule, not the cursor, is what keeps a restarted job from
+  refetching. Batches of 20 (`GET /product?domain=1&asin=…&buybox=1&rating=1`,
+  never `offers`), **4 tokens per ASIN** (spike S3; the patch's "about 3" was
+  the estimate), paced from every reply's `tokensLeft` / `refillIn` /
+  `refillRate`: HTTP 429 → wait and retry the same batch; any other failure →
+  3 retries with backoff, then those ASINs are `error:` outcomes and the job
+  goes on. Outcomes `fetched` · `not_due` · `not_found` · `error` ·
+  `series_missing:<name>`; `tokens` in the counts; a daily job that ends with
+  in-scope ASINs unfetched records `keepa_incomplete: N` (shown on its row in
+  the jobs dialog as "N not fetched today"). Dead ASINs are never in scope;
+  what is stored for them stays. ~2,456 ASINs × 4 ≈ 9,824 tokens; the
+  Starter bucket (~1,260, +21/min) makes the daily job about 7 hours.
+- **Storage:** change points → one INTEGER per America/New_York day, the
+  value in effect at the END of the day (a value holds until the next change
+  point), `-1` → NULL, the series ending on `product.lastUpdate`'s day;
+  `buy_box` = csv[18] price + shipping, `new_price` csv[1], `sales_rank`
+  csv[3], `offers_new` csv[11], `offers_new_fba` csv[34] `COUNT_NEW_FBA`
+  (Keepa added it 2026-02; history from then), `rating_count` csv[17],
+  `monthly_sold` `monthlySoldHistory`. One transaction per ASIN: each series
+  in the response REPLACES its row; a series AF holds that the response lacks
+  is kept (`series_missing`); a failed or partial response writes nothing for
+  that ASIN. Leave `update` unset (spike S6: every product under a day old).
+- **Surfaces:** `GET /api/jobs/current` carries `keepa`; the jobs dialog
+  rows read `scheduled · Keepa` / `onboarding · Keepa` with ASIN progress;
+  the refresh-side queries (onboarding dedupe, the last-pass banner,
+  persistent failures) say `kind = 'refresh'`.
+- **Tests:** `server/keepa.test.ts` (the recorded product
+  `server/__fixtures__/keepa/B08G6J2PY5.json`, pacing, 429, retries,
+  series_missing, partial, lane K claims, the tick, no `offers`, no key in
+  the client), `server/keepa.db.test.ts` (the real schema, rolled back),
+  `server/keepa-trends.test.ts` (buckets, gaps, scales, the routes).
+  `npm run keepa:spike` re-runs the spike; `--fixture-only` refreshes the
+  fixture for 4 tokens.
 
 #### Step failures (Maria 2026-11-05)
 
@@ -3595,6 +3721,7 @@ that writes it:
 | `has_live_offer`, `has_buyable_offer`, `current_issues` + stamps | component 16 through the §18 A2 primitive (also the §19 ladder / verdicts) |
 | `asin_skus.listing_created_at`, `offer_end_at`, `listing_checked_at` | component 16 only (2026-10-18) |
 | `sku_ledger_state` | component 23 only (nightly + the `ledger_window` backfill) |
+| `keepa_series`, `keepa_fetch` (migration 121, 2026-11-18) | component 33 only — Keepa jobs on lane K (§11 "Keepa jobs"); `GET /api/keepa/*` reads |
 | `listing_actions` | components 22 (close) and 24 (delete) and the hygiene Release route; `verified_at` / `verified` / `not_effective` by component 16 |
 | `primary_sku`, `asin_skus.is_primary` | component 17 (bootstrap / re-point); the Add-Offer path on creation (§18) |
 | `is_search_suppressed` | component 18 (stage-then-swap) |
@@ -8689,6 +8816,7 @@ platform's values always win.
 | `SESSION_SECRET` | yes | Signs the `af.sid` session cookie (§25). **Required in production: the server refuses to start without it.** Generate with `openssl rand -hex 32`. Locally it must be in `.env` too, because `npm start` sets `NODE_ENV=production` itself; `npm run dev` falls back to a logged, insecure dev value. Add it to Render **before** the first auth commit deploys. |
 | `EASYPOST_API_KEY` | yes | EasyPost production key — carrier status on every tracking row (§26 "Carrier status — EasyPost"). Unset → components 31 / 32 skip with a note; locally `EASYPOST_TEST_API_KEY` is the fallback (test codes only). |
 | `EASYPOST_WEBHOOK_SECRET` | yes | The secret EasyPost shows when the `tracker.updated` webhook is created; `POST /webhooks/easypost` rejects every event whose HMAC does not match. Unset → every event is 401. |
+| `KEEPA_API_KEY` | yes | Keepa API (Starter plan, 20 tokens/min) — the Keepa trend columns' history (§6 "Keepa trend columns", §11 "Keepa jobs (lane K)"). Server-side only, never in the browser (the Product cell's hover graph is Keepa's public image URL, no key). Unset → no Keepa job is enqueued and component 33 skips with a note; the columns stay empty. |
 
 `APP_PASSWORD` is gone (auth v1, 2026-10-14): `POST /api/verify-password`
 was removed with it. Login is §25.

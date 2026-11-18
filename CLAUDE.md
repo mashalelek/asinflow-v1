@@ -14,14 +14,14 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - **Database:** PostgreSQL (local, database name: `asinflow`)
 - **ORM/DB access:** Direct `pg` queries (no Drizzle, no Prisma)
 - **Scheduled jobs:** node-cron (runs in the Express process)
-- **APIs:** Amazon SP-API, Google Sheets API (service account)
+- **APIs:** Amazon SP-API, Google Sheets API (service account), Keepa API (trend columns, 2026-11-18)
 
 ### What exists and is working (do NOT rebuild or remove):
 - PostgreSQL persistence — all ASIN data, estimates, sales, inventory, tags, settings stored in DB
 - Schema: `database/schema_baseline_2026-10-15.sql` plus `database/migrations/` — reference these for all table structures (`docs/SCHEMA.md` never existed in this repo)
 - Google Sheets API integration — the Orders (PO tracker) sheet is **history only since 2026-11-13** (`docs/claude_spec-patch-orders-sheet-retirement.md`): no code path reads it and AF has no access to it (D8 unplug 2026-11-13: the share removed, `GOOGLE_SHEET_ID` deleted, `server/sheet-read.ts` gone; `server/google-sheets.ts` holds only the row shapes `po-af-source.ts` builds from AF). Never add a `GOOGLE_SHEET_ID` back. The Sourcing sheet and the ER leads sheet are different spreadsheets and are still read. COGS, cost, prep and supplier come from AF's PO tables (`purchase_orders` / `po_asins` / `po_line_items`, via `server/po-af-source.ts`)
 - SP-API integrations: catalog data, pricing, inventory (`getInventorySummaries`), sales (flat file orders report), listings restrictions, suppression (FYP report)
-- Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally)
+- Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally); the 00:00 tick also enqueues the daily Keepa job (lane K, 2026-11-18)
 - Toolbar buttons: Upload File, Analyze, Sync Inventory, Sync Sales (Sync POs removed 2026-11-13)
 - Date range selector with presets
 - Column visibility and order per user through the Columns panel (view presets removed 2026-11-18; `fba-column-config` in localStorage is the only column store, Bulk Calc and the Repricer tab have their own keys)
@@ -59,6 +59,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - `server/config/ai.ts` — the one place the Claude model id / tokens / effort / price live (Capture PO, promo backfill)
 - `shared/po-edit-form.ts` / `server/po-edit-form.ts` — Edit PO as a page (`/pos/:id/edit`, `client/src/pages/po-edit-page.tsx`): the stored PO as the New PO form, the edited form diffed into the existing per-field editors (one History row per field, one transaction)
 - `server/po-prefill.ts` — `/api/pos/prefill`: capture → one Haiku call → form prefill + markers; `chrome-extension/` is the capture side
+- `server/keepa.ts` / `server/keepa-trends.ts` / `shared/keepa.ts` / `client/src/components/keepa-trends.tsx` + `.css` — **Keepa trend columns (2026-11-18; `docs/claude_spec-patch-keepa-trends.md`, spike `docs/keepa-spike-2026-11-18.md`, mockup `docs/mockups/keepa-trends-2026-11-18.html` = the UI spec; migration 121).** `server/keepa.ts` is the ONLY module calling `api.keepa.com` (`GET /product`, ≤ 20 ASINs, `buybox=1&rating=1`, never `offers`; 4 tokens per ASIN); change points → one INTEGER per ET day in `keepa_series` (`-1` → NULL), `keepa_fetch` per ASIN; **component 33 runs only in Keepa jobs (`jobs.kind = 'keepa'`) on lane K** beside S and M — the daily job from the 00:00 tick (active + parked, one at a time), a new-ASIN job from `enqueueOnboardingJob` (the one enqueue point), claimed ahead of a queued daily job and run inline by a running one; token pacing from every reply, 429 → wait, other failures → 3 retries then `error:`; `keepa_incomplete` on the daily job's row. `server/keepa-trends.ts` is the ONE place the bucket (14 equal time buckets, half-coverage gap rule) and scale math lives (`/api/keepa/trends`, `/api/keepa/history/:asin`); the client draws. Four columns in the Keepa group on every ASIN table (ASINs, Bulk Calc, Repricer, Analytics), never sorted / filtered / exported; range + toggles stored with each table's column config. `KEEPA_API_KEY` server-side only; tests never call Keepa (`server/__fixtures__/keepa/`). The patch's "component 25" is PO tracking ingest in the code — 33 is the number.
 - `server/dashboard.ts` / `server/dashboard-range.ts` / `shared/dashboard.ts` — the Dashboard (SPEC §28): range sets, the Spend · Sales · Profit grid SQL, the chart series; `client/src/pages/dashboard.tsx`, `metric-grid.tsx`, `dashboard-chart.tsx`. **Supplier write-offs + Lost / damaged by us (claims commit 9, 2026-11-15; patch §3.14's eight rows are the spec and the test; mockup `docs/mockups/dashboard-writeoffs-2026-11-15.html`):** two cells in every tile's SPEND grid — write-offs = `CLAIM_REMAINING_SQL` over closed claims with a `write_off_reason`, by the write-off's Eastern day (`WRITTEN_OFF_ON_SQL`, `server/supplier-claim-sql.ts`), "· N claims", split by kind on hover, → `/claims?bucket=closed&written_off_from&written_off_to` (the Claims list filters on the row's `written_off_on`); lost / damaged = `po_asin_expected.lost_damaged_us_asin` × `cost_per_unit` by the PO's order date, "· N ASIN units", → `/purchase-orders?lost=1&closed=all&from&to` (`LOST_DAMAGED_PO_SQL`). Neither touches Spend; "$0.00" dim when empty; ONE statement per range set (the write-offs CTE sits beside `units`). The 143 sheet-era write-offs were re-dated to their PO's order date on production 2026-11-15 (`npm run claims:redate-writeoffs -- [--prod] [--live]`, dry run by default, one History row per claim, refuses while a PO has no order date).
 - `server/po-documents.ts` / `server/po-documents-routes.ts` / `server/drive-client.ts` / `server/pdf-render.ts` / `shared/po-documents.ts` — PO documents (SPEC §22 "PO documents", §26, component 29): order emails rendered to PDF in Maria's Drive (type by subject: `server/order-email-classify.ts`, the AI fallback for the rest), existing PDFs linked by name, the paperclip and the Documents tab (`client/src/components/po-documents.tsx`)
 - `server/supplier-claims.ts` / `shared/supplier-claim.ts` / `server/supplier-claim-sql.ts` — Supplier claims (SPEC §22 "Supplier claims", migrations 101–102; was defects, 094): one record per supplier problem on a line (8 kinds), qty in Individual units (NULL = not known yet: an `enter_quantity` task asks for it and the claim counts toward nothing until typed), $ owed auto / manual, refunds applied (one refund across several claims via `amount_applied`), tasks (a tick records what it means: `doneTask` body), outcomes, write-off remainder; an OPEN claim keeps its PO open (D15; since 2026-11-13 a fully canceled PO with nothing shipped closes once its last claim closes and reads **Canceled**, `shared/po-status.ts`; every refund-row route re-runs the rule too); Cancel PO / "cancel" open canceled claims (D14)
@@ -172,6 +173,8 @@ SP_API_CLIENT_ID
 SP_API_CLIENT_SECRET
 SP_API_REFRESH_TOKEN
 SP_API_SELLER_ID
+KEEPA_API_KEY      # Keepa trend columns (SPEC §6 / §11 "Keepa jobs (lane K)"). Optional: unset → no
+                   # Keepa job, empty trend cells. Server-side only; in the local .env and on Render.
 SESSION_SECRET     # Signs the login cookie (SPEC §25). Required by `npm start`
                    # (it sets NODE_ENV=production, and production refuses to
                    # start without one). Generate: openssl rand -hex 32.
@@ -453,6 +456,8 @@ Recheck now, Park/Unpark/Mark dead/Revive stay direct calls; Sync Sourcing
 and Upload File keep their inline sheet/CSV step and only the onboarding
 Refresh they spawn is a job. `jobs.components` (migration 053) remains for
 subset jobs such as the sales backfill.
+
+**Lane K (Keepa, 2026-11-18):** Keepa jobs (`kind = 'keepa'`) run on their own lane beside S and M; component 33 appears in no refresh job's plan (`planFor`), and no Keepa job runs anything else. SPEC §11 "Keepa jobs (lane K)".
 
 **Schedule:** `server/scheduler/schedule.ts`, node-cron with
 `timezone: 'America/New_York'`: `0 0 * * *` (daily block) and
