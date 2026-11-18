@@ -28,6 +28,7 @@ function bulkJob(over: Partial<JobRow> = {}): JobRow {
 /** Shim DB: list rows, catalog membership, bulk_list_asins writes recorded. */
 function makeDb(opts: { listAsins: string[]; catalog: string[]; job: JobRow }) {
   const sql: Array<{ s: string; params: any[] }> = [];
+  const inserts: any[][] = [];
   const job = opts.job;
   const ledger: any[] = [];
   const query: QueryLike = async (text, params = []) => {
@@ -43,11 +44,12 @@ function makeDb(opts: { listAsins: string[]; catalog: string[]; job: JobRow }) {
     if (s.startsWith("INSERT INTO refresh_runs")) { ledger.push({ stage: params[2], scope: params[3], requested: params[4], counts: JSON.parse(params[5]) }); return { rows: [], rowCount: 1 }; }
     if (s.startsWith("UPDATE bulk_list_asins b SET")) return { rows: [], rowCount: params[1].length };
     if (s.startsWith("UPDATE bulk_list_asins")) return { rows: [], rowCount: 1 };
-    if (s.startsWith("INSERT INTO jobs")) return { rows: [{ ...job, id: 9, status: "queued", scope_asins: params[4], trigger: params[0], target: params[1], bulk_list_id: params[2], include_daily: params[3] }], rowCount: 1 };
+    if (s.startsWith("INSERT INTO jobs")) { inserts.push(params); return { rows: [{ ...job, id: 9 + inserts.length - 1, status: "queued", kind: params[8], scope_asins: params[4], trigger: params[0], target: params[1], bulk_list_id: params[2], include_daily: params[3] }], rowCount: 1 }; }
+    if (s.includes("FROM jobs WHERE kind = 'keepa' AND trigger = 'bulk' AND bulk_list_id = $1 AND status = 'queued'")) return { rows: [], rowCount: 0 };
     if (s.startsWith("SELECT id, kind, trigger, target, bulk_list_id, include_daily, scope_asins, components, params, status, progress, summary, requested_by, queued_at, started_at, finished_at, error FROM jobs WHERE status IN")) return { rows: [], rowCount: 0 };
     throw new Error(`unhandled SQL in bulk shim: ${s.slice(0, 90)}`);
   };
-  return { sql, ledger, job, query };
+  return { sql, ledger, job, query, inserts };
 }
 
 const fakePasses = (): BulkPasses & { seen: Record<string, string[]> } => {
@@ -158,14 +160,37 @@ describe("enqueueBulkRefresh + status", () => {
     expect(r2.kind === "queued" && r2.job.scope_asins).toEqual(["A2"]);
   });
 
+  it("every Refresh (the list's creation runs its first) enqueues ONE Keepa job for the WHOLE list beside the refresh job: kind keepa, trigger bulk, target main, the list id carried; none without a key (Maria 2026-11-18)", async () => {
+    const db = makeDb({ listAsins: ["A1", "A2"], catalog: ["A1"], job: bulkJob() });
+    const r = await enqueueBulkRefresh(LIST, { scope: "all", asins: ["A2"], keepaEnabled: () => true }, db.query);
+    expect(r.kind).toBe("queued");
+    if (r.kind === "queued") {
+      expect(r.job.kind ?? "refresh").toBe("refresh");
+      expect(r.keepaJob).toMatchObject({ kind: "keepa", trigger: "bulk", target: "main", bulk_list_id: LIST, scope_asins: ["A1", "A2"] }); // the whole list, not the refresh's subset
+    }
+    expect(db.inserts.map((p) => [p[8], p[0], p[1], p[4]])).toEqual([["refresh", "bulk", "bulk", ["A2"]], ["keepa", "bulk", "main", ["A1", "A2"]]]);
+    // the Keepa job's ASINs came with the call: the enqueue read bulk_list_asins once (the refresh's own read), the job itself reads none
+    expect(db.sql.filter((x) => /bulk_list_asins/.test(x.s))).toHaveLength(1);
+    const off = makeDb({ listAsins: ["A1"], catalog: [], job: bulkJob() });
+    const r2 = await enqueueBulkRefresh(LIST, { scope: "all", keepaEnabled: () => false }, off.query);
+    expect(r2.kind === "queued" && r2.keepaJob).toBeNull();
+    expect(off.inserts).toHaveLength(1);
+  });
+
   it("an empty list is reported, not queued", async () => {
     const db = makeDb({ listAsins: [], catalog: [], job: bulkJob() });
     expect((await enqueueBulkRefresh(LIST, { scope: "all" }, db.query)).kind).toBe("empty");
   });
 
-  it("status maps the active job's progress into the shape the Bulk Calc page polls", async () => {
-    const q: QueryLike = async () => ({ rows: [{ id: 5, status: "running", progress: { component: 10, position: 3, total: 8 }, started_at: "x", finished_at: null, error: null }], rowCount: 1 });
-    expect(await bulkRefreshStatus(LIST, q)).toMatchObject({ jobId: 5, status: "running", stage: "component 10", current: 3, total: 8 });
+  it("status maps the active job's progress into the shape the Bulk Calc page polls; the list's Keepa job rides along as `keepa`, and stands in when the refresh job is gone", async () => {
+    const refreshRow = { id: 5, kind: "refresh", status: "running", progress: { component: 10, position: 3, total: 8 }, started_at: "x", finished_at: null, error: null };
+    const keepaRow = { id: 6, kind: "keepa", status: "running", progress: { component: 33, position: 20, total: 40, unit: "ASINs" }, started_at: "y", finished_at: null, error: null };
+    const both: QueryLike = async (text) => ({ rows: /kind = 'keepa'/.test(text) ? [keepaRow] : [refreshRow], rowCount: 1 });
+    expect(await bulkRefreshStatus(LIST, both)).toMatchObject({ jobId: 5, status: "running", stage: "component 10", current: 3, total: 8, keepa: { jobId: 6, status: "running", stage: "Keepa history", current: 20, total: 40 } });
+    const keepaOnly: QueryLike = async (text) => (/kind = 'keepa'/.test(text) ? { rows: [keepaRow], rowCount: 1 } : { rows: [], rowCount: 0 });
+    expect(await bulkRefreshStatus(LIST, keepaOnly)).toMatchObject({ jobId: 6, stage: "Keepa history", keepa: { jobId: 6 } });
+    const refreshOnly: QueryLike = async (text) => (/kind = 'keepa'/.test(text) ? { rows: [], rowCount: 0 } : { rows: [refreshRow], rowCount: 1 });
+    expect(await bulkRefreshStatus(LIST, refreshOnly)).toMatchObject({ jobId: 5, keepa: null });
     const none: QueryLike = async () => ({ rows: [], rowCount: 0 });
     expect(await bulkRefreshStatus(LIST, none)).toBeNull();
   });

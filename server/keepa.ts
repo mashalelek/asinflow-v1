@@ -17,16 +17,18 @@
 //             the full history), keepa_fetch upserted; a series AF holds that the response lacks stays and the
 //             outcome notes series_missing:<name>; a failed / partial response writes nothing for that ASIN.
 //   job       component 33, Keepa jobs only (lane K). Scope ordered never-fetched first, then oldest fetched_at;
-//             an ASIN fetched since the job's threshold (the daily job: 00:00 ET today; a new-ASIN job: when it
-//             was queued) is `not_due`. The daily job runs queued new-ASIN jobs INLINE between its own batches
-//             (they go ahead of it), and records `keepa_incomplete` = in-scope ASINs not fetched today when it
-//             ends. Dead ASINs are never in scope; what is stored for them stays.
+//             an ASIN fetched since the job's threshold (the daily job and a Bulk Calc job: 00:00 ET today; a
+//             new-ASIN job: when it was queued) is `not_due`. Lane K's order is new-ASIN jobs, the daily job, bulk
+//             jobs; a running job yields between its batches to queued jobs ahead of it, running them INLINE
+//             (`runQueuedKeepaJobsAhead`). The daily job records `keepa_incomplete` = in-scope ASINs not fetched
+//             today when it ends. Dead ASINs are never in scope; what is stored for them stays. A Bulk Calc job's
+//             scope is the ASIN list its enqueue call carried — it reads no bulk table (SPEC §21).
 //
 // KEEPA_API_KEY is server-side only (SPEC §24): it is in no client bundle and no API response (server/keepa.test.ts
 // scans for it). Tests use the recorded product under __fixtures__/keepa/ — never a live call.
 import { poolForLane } from "./db";
 import { finishJob, recordComponentRun, writeProgress } from "./scheduler/jobs-repo";
-import type { ComponentContext, ComponentResult, JobRow, JobSummary, QueryLike } from "./scheduler/types";
+import { keepaTriggersAhead, type ComponentContext, type ComponentResult, type JobRow, type JobSummary, type JobTrigger, type QueryLike } from "./scheduler/types";
 
 import { KEEPA_SERIES, type KeepaSeries } from "@shared/keepa";
 export { KEEPA_SERIES, type KeepaSeries };
@@ -246,9 +248,25 @@ export async function dueAsins(query: QueryLike, scope: readonly string[], thres
   return { due, notDue };
 }
 
-/** The job's threshold: the daily job = 00:00 ET today; a new-ASIN job = when it was queued (a restart refetches nothing). */
+/**
+ * The job's threshold: the daily job and a Bulk Calc job = 00:00 ET today (a list's catalog ASINs fetched by the daily
+ * job cost nothing extra); a new-ASIN job = when it was queued (a restart refetches nothing).
+ */
 export function fetchThreshold(job: Pick<JobRow, "trigger" | "queued_at">, now: Date): Date {
-  return job.trigger === "scheduled" ? new Date(etDayStartMs(etDayOf(now.getTime()))) : new Date(job.queued_at);
+  return job.trigger === "scheduled" || job.trigger === "bulk" ? new Date(etDayStartMs(etDayOf(now.getTime()))) : new Date(job.queued_at);
+}
+
+/**
+ * A Keepa job's scope. The daily job: active + parked `asins`; a new-ASIN job: its ASINs that are in `asins`; a Bulk
+ * Calc job: its ASIN list VERBATIM — the list came with the enqueue call, the job reads no bulk table and no catalog
+ * table (SPEC §21 isolation), and a bulk-only ASIN is in no other Keepa job's scope.
+ */
+export async function resolveKeepaScope(query: QueryLike, job: Pick<JobRow, "trigger" | "scope_asins">): Promise<string[]> {
+  if (job.trigger === "bulk") return Array.from(new Set((job.scope_asins ?? []).map((a) => String(a).trim().toUpperCase()).filter(Boolean)));
+  if (job.trigger === "scheduled" && !(job.scope_asins && job.scope_asins.length)) {
+    return (await query(`SELECT asin FROM asins WHERE status IN ('active','parked') ORDER BY id`)).rows.map((x: any) => String(x.asin));
+  }
+  return (await query(`SELECT asin FROM asins WHERE asin = ANY($1::text[]) ORDER BY id`, [job.scope_asins ?? []])).rows.map((x: any) => String(x.asin));
 }
 
 /**
@@ -318,54 +336,50 @@ export async function fetchKeepaForAsins(asins: readonly string[], deps: KeepaFe
   return { counts, outcomes };
 }
 
-/**
- * Queued new-ASIN Keepa jobs, run to completion INLINE by the daily job between its batches (lane K runs one job at
- * a time, so this is how a new-ASIN job goes ahead of a running daily job). Each gets its own ledger row and summary.
- */
-export async function runQueuedNewAsinJobs(ctx: Pick<ComponentContext, "query" | "log">, tokens: TokenState, stage: string, tx?: typeof withKeepaTx): Promise<number> {
-  const r = await ctx.query(`SELECT id, trigger, queued_at, scope_asins FROM jobs WHERE kind = 'keepa' AND trigger = 'onboarding' AND status = 'queued' ORDER BY queued_at, id`);
-  let ran = 0;
-  for (const row of r.rows) {
-    const id = Number(row.id);
-    const u = await ctx.query(`UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, NOW()) WHERE id = $1 AND status = 'queued' RETURNING id`, [id]);
-    if (u.rows.length === 0) continue; // the lane loop or another instance took it
-    const startedAt = keepaDeps.now();
-    const scope = (await ctx.query(`SELECT asin FROM asins WHERE asin = ANY($1::text[]) ORDER BY id`, [row.scope_asins ?? []])).rows.map((x: any) => String(x.asin));
-    const { due, notDue } = await dueAsins(ctx.query, scope, fetchThreshold({ trigger: "onboarding", queued_at: row.queued_at }, startedAt));
-    ctx.log(`new-ASIN Keepa job #${id} runs inline: ${due.length} ASIN(s)${notDue.length ? `, ${notDue.length} already fetched` : ""}`);
-    const result = await fetchKeepaForAsins(due, {
-      query: ctx.query, log: (m) => ctx.log(`#${id}: ${m}`), tokens, tx,
-      onBatch: (done, total) => writeProgress(id, { done: [], component: 33, position: done, total, unit: "ASINs" }, ctx.query),
-    });
-    result.counts.not_due = notDue.length;
-    const summary: JobSummary = { asins: scope.length, durationMs: keepaDeps.now().getTime() - startedAt.getTime(), components: { [stage]: result.counts }, flips: [] };
-    await recordComponentRun({ jobId: id, trigger: "onboarding", stage, scope: "subset", requested: due.length, startedAt, result, error: null }, ctx.query);
-    await finishJob(id, "done", summary, null, ctx.query);
-    ran++;
-  }
-  return ran;
+const jobWord = (trigger: string): string => (trigger === "scheduled" ? "daily" : trigger === "bulk" ? "bulk" : "new-ASIN");
+
+export interface KeepaJobRun {
+  job: Pick<JobRow, "id" | "trigger" | "queued_at" | "scope_asins">;
+  query: QueryLike;
+  log: (m: string) => void;
+  stage: string;
+  tokens: TokenState;
+  tx?: typeof withKeepaTx;
+  /** The scope when the caller resolved it already (the lane runner's `ctx.scopeAsins`); else `resolveKeepaScope`. */
+  scope?: readonly string[];
+  /** The lane runner's checkpoint / progress (cancel check included); an inline run writes progress itself. */
+  checkpoint?: (lastAsin: string) => Promise<void>;
+  setProgress?: (position: number, total: number, unit: string) => Promise<void>;
 }
 
-/** Component 33's body. */
-export async function runKeepaJob(ctx: ComponentContext, stage: string): Promise<ComponentResult> {
-  if (keepaMode() === "off") { ctx.log("KEEPA_API_KEY not set — skipped"); return { counts: { skipped_no_key: 1 }, outcomes: {} }; }
+/**
+ * ONE Keepa job's body, shared by the lane runner (component 33) and the inline runs: resolve the scope, drop what
+ * was fetched since the threshold, fetch the rest in batches — yielding BEFORE each batch to queued jobs ahead of
+ * this one on lane K (new-ASIN jobs ahead of the daily job, both ahead of a bulk job; `keepaTriggersAhead`) — and,
+ * for the daily job, count `keepa_incomplete`.
+ */
+export async function executeKeepaJob(run: KeepaJobRun): Promise<{ result: ComponentResult; scope: string[] }> {
+  const { job, query, log, stage, tokens } = run;
   const now = keepaDeps.now();
-  const threshold = fetchThreshold(ctx.job, now);
-  const scope = ctx.scopeAsins;
-  const { due, notDue } = await dueAsins(ctx.query, scope, threshold);
-  const daily = ctx.job.trigger === "scheduled";
-  ctx.log(`${daily ? "daily" : "new-ASIN"} Keepa job: ${due.length} ASIN(s) to fetch, ${notDue.length} not due (fetched since ${threshold.toISOString()})`);
-  const tokens = freshTokenState();
+  const threshold = fetchThreshold(job, now);
+  const scope = run.scope ? Array.from(run.scope) : await resolveKeepaScope(query, job);
+  const { due, notDue } = await dueAsins(query, scope, threshold);
+  const ahead = keepaTriggersAhead(job.trigger);
+  log(`${jobWord(job.trigger)} Keepa job: ${due.length} ASIN(s) to fetch, ${notDue.length} not due (fetched since ${threshold.toISOString()})`);
   let inlineJobs = 0;
   const result = await fetchKeepaForAsins(due, {
-    query: ctx.query, log: ctx.log, tokens,
-    beforeBatch: daily ? async () => { inlineJobs += await runQueuedNewAsinJobs(ctx, tokens, stage); } : undefined,
-    onBatch: async (done, total, lastAsin) => { await ctx.checkpoint(lastAsin); await ctx.setProgress(done, total, "ASINs"); },
+    query, log, tokens, tx: run.tx,
+    beforeBatch: ahead.length ? async () => { inlineJobs += await runQueuedKeepaJobsAhead({ query, log }, tokens, stage, job.trigger, run.tx); } : undefined,
+    onBatch: async (done, total, lastAsin) => {
+      if (run.checkpoint) await run.checkpoint(lastAsin);
+      if (run.setProgress) await run.setProgress(done, total, "ASINs");
+      else await writeProgress(job.id, { done: [], component: 33, position: done, total, unit: "ASINs" }, query);
+    },
   });
   result.counts.not_due = notDue.length;
-  if (inlineJobs) result.counts.new_asin_jobs_inline = inlineJobs;
-  if (daily && scope.length) {
-    const r = await ctx.query(
+  if (inlineJobs) result.counts.jobs_ahead_inline = inlineJobs;
+  if (job.trigger === "scheduled" && scope.length) {
+    const r = await query(
       `SELECT count(*)::int AS n FROM unnest($1::text[]) a(asin) LEFT JOIN keepa_fetch f ON f.asin = a.asin
         WHERE f.asin IS NULL OR f.fetched_at < $2 OR f.status <> 'fetched'`,
       [scope, threshold],
@@ -373,6 +387,58 @@ export async function runKeepaJob(ctx: ComponentContext, stage: string): Promise
     const incomplete = Number(r.rows[0]?.n ?? 0);
     if (incomplete) { result.counts.keepa_incomplete = incomplete; result.outcomes._keepa_incomplete = `${incomplete} in-scope ASIN(s) not fetched today`; }
   }
-  ctx.log(`done: fetched=${result.counts.fetched} not_found=${result.counts.not_found} error=${result.counts.error} tokens=${result.counts.tokens}${result.counts.keepa_incomplete ? ` keepa_incomplete=${result.counts.keepa_incomplete}` : ""}`);
+  log(`done: fetched=${result.counts.fetched} not_found=${result.counts.not_found} error=${result.counts.error} tokens=${result.counts.tokens}${result.counts.keepa_incomplete ? ` keepa_incomplete=${result.counts.keepa_incomplete}` : ""}`);
+  return { result, scope };
+}
+
+/**
+ * Queued Keepa jobs AHEAD of a running job with `trigger` (KEEPA_TRIGGER_ORDER), run to completion INLINE between
+ * its batches — lane K runs one job at a time, so this is how a job ahead of a running one goes first: the daily
+ * job yields to new-ASIN jobs; a bulk job yields to new-ASIN jobs and the daily job (which, inline, yields to
+ * new-ASIN jobs in turn). Each gets its own ledger row, progress and summary.
+ */
+export async function runQueuedKeepaJobsAhead(ctx: Pick<ComponentContext, "query" | "log">, tokens: TokenState, stage: string, trigger: JobTrigger, tx?: typeof withKeepaTx): Promise<number> {
+  const ahead = keepaTriggersAhead(trigger);
+  if (ahead.length === 0) return 0;
+  const r = await ctx.query(
+    `SELECT id, trigger, queued_at, scope_asins FROM jobs WHERE kind = 'keepa' AND trigger = ANY($1::text[]) AND status = 'queued'
+      ORDER BY (trigger = 'onboarding') DESC, (trigger = 'scheduled') DESC, queued_at, id`,
+    [ahead],
+  );
+  let ran = 0;
+  for (const row of r.rows) {
+    const id = Number(row.id);
+    if (!ahead.includes(row.trigger)) continue;
+    const u = await ctx.query(`UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, NOW()) WHERE id = $1 AND status = 'queued' RETURNING id`, [id]);
+    if (u.rows.length === 0) continue; // the lane loop or another instance took it
+    const startedAt = keepaDeps.now();
+    const job = { id, trigger: row.trigger as JobTrigger, queued_at: row.queued_at, scope_asins: row.scope_asins ?? null };
+    ctx.log(`${jobWord(job.trigger)} Keepa job #${id} runs inline, ahead of the ${jobWord(trigger)} job`);
+    try {
+      const { result, scope } = await executeKeepaJob({ job, query: ctx.query, log: (m) => ctx.log(`#${id}: ${m}`), stage, tokens, tx });
+      const summary: JobSummary = { asins: scope.length, durationMs: keepaDeps.now().getTime() - startedAt.getTime(), components: { [stage]: result.counts }, flips: [] };
+      await recordComponentRun({ jobId: id, trigger: job.trigger, stage, scope: job.scope_asins ? "subset" : "full", requested: scope.length - (result.counts.not_due ?? 0), startedAt, result, error: null }, ctx.query);
+      await finishJob(id, "done", summary, null, ctx.query);
+    } catch (err: any) {
+      const msg = String(err?.message ?? err).split("\n")[0].slice(0, 300);
+      ctx.log(`Keepa job #${id} (inline) FAILED: ${msg}`);
+      await finishJob(id, "failed", { asins: 0, durationMs: keepaDeps.now().getTime() - startedAt.getTime(), components: {}, flips: [] }, `component 33 ${stage}: ${msg}`, ctx.query);
+    }
+    ran++;
+  }
+  return ran;
+}
+
+/** The daily job's inline runs (new-ASIN jobs) — `runQueuedKeepaJobsAhead` for trigger scheduled. */
+export const runQueuedNewAsinJobs = (ctx: Pick<ComponentContext, "query" | "log">, tokens: TokenState, stage: string, tx?: typeof withKeepaTx): Promise<number> =>
+  runQueuedKeepaJobsAhead(ctx, tokens, stage, "scheduled", tx);
+
+/** Component 33's body. */
+export async function runKeepaJob(ctx: ComponentContext, stage: string): Promise<ComponentResult> {
+  if (keepaMode() === "off") { ctx.log("KEEPA_API_KEY not set — skipped"); return { counts: { skipped_no_key: 1 }, outcomes: {} }; }
+  const { result } = await executeKeepaJob({
+    job: ctx.job, query: ctx.query, log: ctx.log, stage, tokens: freshTokenState(), scope: ctx.scopeAsins,
+    checkpoint: (a) => ctx.checkpoint(a), setProgress: (p, t, u) => ctx.setProgress(p, t, u),
+  });
   return result;
 }

@@ -14,14 +14,17 @@ export type JobTrigger = "scheduled" | "manual" | "onboarding" | "bulk";
  * person or an onboarding started (manual, onboarding, bulk), one at a time
  * in queue order (Maria, 2026-10-16: manual actions never wait on the scheduled
  * pass). Lane K = Keepa jobs (kind 'keepa': the daily job, trigger 'scheduled',
- * and new-ASIN jobs, trigger 'onboarding'), one at a time — a different API
- * writing different tables, so a Keepa job waiting for tokens holds nothing up
- * (docs/claude_spec-patch-keepa-trends.md "Fetching: lane K"). All lanes run
+ * new-ASIN jobs, trigger 'onboarding', and Bulk Calc list jobs, trigger 'bulk'),
+ * one at a time — a different API writing different tables, so a Keepa job
+ * waiting for tokens holds nothing up (docs/claude_spec-patch-keepa-trends.md
+ * "Fetching: lane K"). Order on lane K (Maria 2026-11-18): new-ASIN jobs, then
+ * the daily job, then bulk jobs (KEEPA_TRIGGER_ORDER); a running job yields
+ * between batches to a job ahead of it. All lanes run
  * concurrently in the same process; a job starts the moment it is enqueued if
  * its lane is idle.
  */
 export type Lane = "S" | "M" | "K";
-export const LANE_TRIGGERS: Record<Lane, readonly JobTrigger[]> = { S: ["scheduled"], M: ["manual", "onboarding", "bulk"], K: ["scheduled", "onboarding"] };
+export const LANE_TRIGGERS: Record<Lane, readonly JobTrigger[]> = { S: ["scheduled"], M: ["manual", "onboarding", "bulk"], K: ["scheduled", "onboarding", "bulk"] };
 export const LANE_KIND: Record<Lane, JobKind> = { S: "refresh", M: "refresh", K: "keepa" };
 export function laneOf(job: Pick<JobRow, "kind" | "trigger">): Lane {
   if (job.kind === "keepa") return "K";
@@ -29,6 +32,13 @@ export function laneOf(job: Pick<JobRow, "kind" | "trigger">): Lane {
 }
 /** The components a Keepa job runs — and that no refresh job ever runs: 33 Keepa history. */
 export const KEEPA_COMPONENTS: readonly number[] = [33];
+/** Lane K's order: new-ASIN jobs, then the daily job, then Bulk Calc jobs (Maria 2026-11-18). */
+export const KEEPA_TRIGGER_ORDER: readonly JobTrigger[] = ["onboarding", "scheduled", "bulk"];
+/** The Keepa triggers a job with `trigger` yields to between its batches (those ahead of it in KEEPA_TRIGGER_ORDER). */
+export function keepaTriggersAhead(trigger: JobTrigger): JobTrigger[] {
+  const i = KEEPA_TRIGGER_ORDER.indexOf(trigger);
+  return i <= 0 ? [] : KEEPA_TRIGGER_ORDER.slice(0, i) as JobTrigger[];
+}
 
 /**
  * An onboarding job runs ONLY the per-ASIN components for its scope: the

@@ -39,7 +39,7 @@ export function failedStepsText(s: JobSummary | null | undefined): string | null
 
 export interface Job {
   id: number;
-  /** 'refresh' (lanes S / M) or 'keepa' (lane K, 2026-11-18: the daily Keepa job, trigger scheduled, and new-ASIN jobs, trigger onboarding). */
+  /** 'refresh' (lanes S / M) or 'keepa' (lane K, 2026-11-18: the daily Keepa job, trigger scheduled; new-ASIN jobs, trigger onboarding; Bulk Calc list jobs, trigger bulk). */
   kind: "refresh" | "keepa";
   trigger: JobTrigger;
   target: "main" | "bulk";
@@ -165,7 +165,7 @@ export function completionText(job: Job): { title: string; description: string }
   const n = s?.asins ?? job.scope_asins?.length ?? 0;
   const ms = jobDurationMs(job);
   const dur = ms != null ? formatDuration(ms) : "";
-  const who = job.kind === "keepa" ? (job.trigger === "scheduled" ? "Daily Keepa fetch" : "Keepa fetch") : job.trigger === "scheduled" ? "Scheduled refresh" : "Refresh";
+  const who = job.kind === "keepa" ? (job.trigger === "scheduled" ? "Daily Keepa fetch" : job.trigger === "bulk" ? "Bulk Calc Keepa fetch" : "Keepa fetch") : job.trigger === "scheduled" ? "Scheduled refresh" : "Refresh";
   if (job.status === "failed") return { title: `${who} failed`, description: job.error ?? "unknown error" };
   if (job.status === "cancelled") return { title: `${who} cancelled`, description: `${n.toLocaleString()} ASINs · stopped at ${componentLabel(s?.stoppedAt)}` };
   const flips = changeCount(s);

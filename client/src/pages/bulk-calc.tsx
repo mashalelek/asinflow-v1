@@ -41,7 +41,7 @@ import {
   type ColumnId,
   type Settings, type PriceSource } from "@shared/schema";
 import { loadColumnConfig, saveColumnConfig, type ColumnConfig } from "@/lib/columns";
-import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
+import { KeepaRangeSwitch, useKeepaPrefs, clearKeepaTrendsCache } from "@/components/keepa-trends";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
@@ -339,45 +339,68 @@ export default function BulkCalc() {
   // status until it ends — this tab's own run (pollTick), a reload, or a
   // run another tab started. Rows reload on every component transition and
   // at the end; the results dialog opens only for a run this tab started.
+  // The list's Keepa job (lane K, 2026-11-18) rides along as `keepa`: shown
+  // AFTER the refresh job on the same progress line ("Keepa history N/M"),
+  // never disabling Refresh; the trend cells refetch as it works.
   useEffect(() => {
     if (!selectedListId) return;
     let timer: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
     let pollStage: string | null = null;
+    let endedJobId: number | null = null;
+    let keepaPos: string | null = null;
     const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+    const isActive = (s: any) => !!s && (s.status === "queued" || s.status === "running");
+    const keepaLine = (k: any) => (k.status === "queued" ? "Keepa history · queued" : `Keepa history ${k.current}/${k.total}`);
     const poll = async () => {
       try {
         const res = await fetch(`/api/bulk-lists/${selectedListId}/refresh/status`);
         if (cancelled) return;
         if (res.status === 204) {
           stop();
-          if (refreshing) { setRefreshing(false); setRefreshProgress(null); await loadRows(selectedListId); }
+          if (refreshing) { setRefreshing(false); await loadRows(selectedListId); }
+          setRefreshProgress(null);
           return;
         }
         const st = await res.json();
-        const active = st.status === "queued" || st.status === "running";
-        if (!active) {
-          stop();
-          setRefreshing(false); setRefreshProgress(null);
+        const keepa = st.keepa ?? null;
+        const keepaActive = isActive(keepa);
+        // The refresh job itself (absent when only the Keepa job is left: the body is then the Keepa job's).
+        const refresh = keepa && st.jobId === keepa.jobId ? null : st;
+        if (refresh && !isActive(refresh) && endedJobId !== refresh.jobId) {
+          endedJobId = refresh.jobId;
+          setRefreshing(false);
           await loadRows(selectedListId);
           await fetchLists();
-          if (st.status === "failed" && st.error) setPageError(st.error);
-          if (watchedJobRef.current === st.jobId) {
+          if (refresh.status === "failed" && refresh.error) setPageError(refresh.error);
+          if (watchedJobRef.current === refresh.jobId) {
             watchedJobRef.current = null;
             try {
-              const d = await (await fetch(`/api/jobs/${st.jobId}`)).json();
+              const d = await (await fetch(`/api/jobs/${refresh.jobId}`)).json();
               const stages: Record<string, any> = {};
               for (const c of d.components ?? []) stages[c.stage] = { counts: c.counts ?? {}, outcomes: c.outcomes ?? {}, error: c.error ?? null };
               setRefreshResult({ stages, rateLimits: {}, job: d.job });
               setRefreshResultOpen(true);
             } catch { /* the rows reloaded; the dialog is a nicety */ }
           }
+        }
+        if (keepaActive) {
+          const pos = `${keepa.status}:${keepa.current}`;
+          if (keepaPos !== null && keepaPos !== pos) clearKeepaTrendsCache(); // a batch landed: the cells on screen refetch
+          keepaPos = pos;
+        } else if (keepaPos !== null) { keepaPos = null; clearKeepaTrendsCache(); }
+        if (refresh && isActive(refresh)) {
+          setRefreshing(true);
+          if (pollStage !== null && pollStage !== refresh.stage) { void loadRows(selectedListId); void fetchLists(); }
+          pollStage = refresh.stage;
+          setRefreshProgress((refresh.status === "queued" ? "queued" : `${refresh.stage} ${refresh.current}/${refresh.total}`) + (keepaActive ? ` · then ${keepaLine(keepa)}` : ""));
+        } else if (keepaActive) {
+          setRefreshProgress(keepaLine(keepa));
+        } else {
+          stop();
+          setRefreshing(false); setRefreshProgress(null);
           return;
         }
-        setRefreshing(true);
-        if (pollStage !== null && pollStage !== st.stage) { void loadRows(selectedListId); void fetchLists(); }
-        pollStage = st.stage;
-        setRefreshProgress(st.status === "queued" ? "queued" : `${st.stage} ${st.current}/${st.total}`);
         if (!timer) timer = setInterval(poll, 3000);
       } catch {}
     };

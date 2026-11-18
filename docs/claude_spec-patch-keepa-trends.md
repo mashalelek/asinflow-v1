@@ -12,6 +12,9 @@
 > superseded). The existing Product-cell hover graph uses Keepa's public image
 > URL with no key (checked before commit 1). SPEC §6 "Keepa trend columns",
 > §11 "Keepa jobs (lane K)", §14, §24.
+> **Bulk Calc fetching (approved 2026-11-18, added to this copy and built as
+> commit 7):** "Jobs" → Bulk Calc, acceptance rows 17–19, SPEC §11 "Keepa
+> jobs (lane K)" → Bulk Calc job, §21 "Isolation guarantee".
 > Runs after `claude_spec-patch-remove-view-presets-and-light-mode.md`.
 >
 > Keepa field names, array positions and token costs below come from Keepa's
@@ -209,8 +212,18 @@ the onboarding Refresh job and Bulk Calc do not include it.
   those ASINs is enqueued at once. One enqueue point, in the shared
   onboarding function.
 
-A new-ASIN job goes ahead of the daily job: the daily job checks between
-batches, lets it run, then continues.
+- **Bulk Calc** (Maria 2026-11-18) — creating a Bulk Calc list, and each
+  click of that list's Refresh, enqueues a Keepa job (`kind keepa, trigger
+  bulk`) for the list's ASINs, next to the existing bulk refresh job. The
+  job leaves out ASINs already fetched since 00:00 ET, so list ASINs that
+  are in the main catalog cost nothing extra. Bulk-only ASINs are not part
+  of the daily job; their Keepa data is as of the list's last run. SPEC §21
+  isolation holds: the Keepa job gets its ASIN list from the enqueue call,
+  reads no bulk table, and writes only `keepa_series` and `keepa_fetch`.
+
+**Order on lane K: new-ASIN jobs, then the daily job, then bulk jobs.** A
+running job yields between batches to a job ahead of it (the daily job to a
+new-ASIN job; a bulk job to both), lets it run, then continues.
 
 ### Running a job
 
@@ -235,8 +248,10 @@ about five hours. A few new ASINs are fetched within a minute or two; a
 - **Incomplete day:** a daily job that ends with in-scope ASINs not fetched
   that day records `keepa_incomplete: N`, shown on its row in the jobs
   dialog.
-- **Jobs dialog:** rows `scheduled · Keepa` and `onboarding · Keepa`,
-  progress in ASINs. `GET /api/jobs/current` gains `keepa`.
+- **Jobs dialog:** rows `scheduled · Keepa`, `onboarding · Keepa` and
+  `bulk · Keepa`, progress in ASINs. `GET /api/jobs/current` gains `keepa`.
+  On the Bulk Calc page the list's Refresh progress shows the Keepa job
+  after the refresh job.
 - Dead ASINs are not fetched; what is stored for them stays.
 
 ## Data model
@@ -316,6 +331,9 @@ Bucket and scale math live in one server-side function; the client draws.
 | 14 | Keepa unreachable for one night | Scheduled passes run as usual; the Keepa job shows the error; charts unchanged |
 | 15 | First load after deploy | The four columns are there; every other column as before |
 | 16 | Side-by-side screenshot, mockup vs AF | Cells, header chips, range switch and popup match |
+| 17 | Create a Bulk Calc list of ASINs not in the catalog | The four columns fill in as the job works through it |
+| 18 | Refresh that list the next day | Charts update; ASINs also in the catalog are not refetched |
+| 19 | A bulk job queued during the daily job | Starts when the daily job ends |
 
 ## Tests
 
@@ -332,6 +350,10 @@ Bucket and scale math live in one server-side function; the client draws.
 - Token pacing follows Keepa's refill values; 429 handling;
   `series_missing` keeps stored data; a partial response writes nothing.
 - Inserting ASINs enqueues exactly one new-ASIN Keepa job.
+- Bulk Calc: one bulk Keepa job per list creation and per Refresh; the job
+  skips ASINs fetched today; lane-K order (new-ASIN, daily, bulk; a bulk job
+  queued during the daily job starts when it ends); the job reads and
+  writes no bulk or main-catalog table.
 - Component 25 appears in no lane-S or lane-M component list.
 - No request to Keepa carries `offers`; the key is in no client bundle or
   API response.
@@ -344,11 +366,13 @@ Bucket and scale math live in one server-side function; the client draws.
 4. `keepa: trends and history endpoints, bucket + scale math`
 5. `keepa: trend columns, header toggles, range switch, hover`
 6. `docs: SPEC §6 / §11 / §14 / §24, CLAUDE.md, component map`
+7. `keepa: Bulk Calc lists enqueue a bulk Keepa job; lane K order new-ASIN, daily, bulk` (the rules approved 2026-11-18, added above)
 
 ## Out of scope
 
 - Sorting, filtering or alerts on the trend columns.
-- Trend columns in Bulk Calc.
+- ~~Trend columns in Bulk Calc.~~ Superseded 2026-11-18: Bulk Calc has the
+  columns and its own Keepa jobs ("Jobs" → Bulk Calc).
 - Using Keepa data in profit math, the repricing engine or the Sellers
   columns.
 - The existing Keepa hover graph on the Product cell.

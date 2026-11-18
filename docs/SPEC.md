@@ -2683,8 +2683,9 @@ is set — the runner is always on; only the **schedule** is gated.
   wait on the scheduled pass; lane K added 2026-11-18). Lane S claims
   `kind = 'refresh' AND trigger = 'scheduled'`; lane M claims `kind =
   'refresh' AND trigger IN ('manual','onboarding','bulk')` in queue order;
-  lane K claims `kind = 'keepa'` (a queued new-ASIN job ahead of a queued
-  daily job) — see "Keepa jobs (lane K)" below. Each
+  lane K claims
+  `kind = 'keepa'` in the order new-ASIN job, daily job, Bulk Calc job
+  (`KEEPA_TRIGGER_ORDER`) — see "Keepa jobs (lane K)" below. Each
   loop: claim its lane's oldest `queued` job (`SELECT … FOR UPDATE SKIP
   LOCKED`, that lane's `running` job first — that is resume, and both
   lanes resume on boot), run it, repeat; idle poll 5 s. All lanes run
@@ -2795,9 +2796,31 @@ the Refresh button, onboarding, Bulk Calc, an explicit `components` list.
   insert path reaches: Upload File, Sync Sourcing, the extension, SC
   discovery, Buy List promote, the sales import) enqueues ONE `kind keepa,
   trigger onboarding` job for the ASINs just inserted, at once. Lane K
-  claims it ahead of a queued daily job; a RUNNING daily job runs queued
-  new-ASIN jobs inline between its batches (`runQueuedNewAsinJobs`), each
-  with its own ledger row and summary.
+    claims it ahead of a queued daily job; a RUNNING daily job runs queued
+  new-ASIN jobs inline between its batches, each with its own ledger row
+  and summary.
+- **Bulk Calc job (Maria 2026-11-18)** — creating a Bulk Calc list (its
+  first refresh) and every click of that list's Refresh enqueue ONE `kind
+  keepa, trigger bulk` job for the WHOLE list beside the bulk refresh job
+  (`enqueueBulkKeepaJob` from `enqueueBulkRefresh`; a job still queued for
+  the list is widened, not duplicated; `bulk_list_id` carried for the
+  list's status route, `target` stays `main`). Its threshold is 00:00 ET
+  today like the daily job's, so list ASINs that are in the main catalog
+  cost nothing extra; bulk-only ASINs are in no other Keepa job — their
+  data is as of the list's last run. **§21 isolation holds:** the job's
+  ASIN list is the enqueue call's argument, used verbatim (`resolveScope`
+  / `resolveKeepaScope`; bulk-only ASINs are not in `asins`), it reads no
+  bulk table and writes only `keepa_series` / `keepa_fetch` (plus its own
+  jobs / ledger rows). The Bulk Calc page's progress line shows it after
+  the refresh job ("Keepa history N/M", `bulkRefreshStatus.keepa`) without
+  disabling Refresh, and the trend cells refetch as batches land.
+- **Order on lane K:** new-ASIN jobs, then the daily job, then bulk jobs —
+  the claim's ORDER BY; and a RUNNING job yields between its batches to
+  queued jobs ahead of it, running them inline to completion
+  (`runQueuedKeepaJobsAhead`: the daily job → new-ASIN jobs; a bulk job →
+  new-ASIN jobs and the daily job, which inline yields to new-ASIN jobs in
+  turn). A bulk job queued during the daily job starts when the daily job
+  ends. The summary count is `jobs_ahead_inline`.
 - **Running:** scope ordered never-fetched first, then oldest
   `keepa_fetch.fetched_at`; an ASIN fetched since the job's threshold (the
   daily job: 00:00 ET today; a new-ASIN job: when it was queued) is `not_due`
@@ -2824,13 +2847,18 @@ the Refresh button, onboarding, Bulk Calc, an explicit `components` list.
   is kept (`series_missing`); a failed or partial response writes nothing for
   that ASIN. Leave `update` unset (spike S6: every product under a day old).
 - **Surfaces:** `GET /api/jobs/current` carries `keepa`; the jobs dialog
-  rows read `scheduled · Keepa` / `onboarding · Keepa` with ASIN progress;
+  rows read `scheduled · Keepa` / `onboarding · Keepa` / `bulk · Keepa` with
+  ASIN progress;
   the refresh-side queries (onboarding dedupe, the last-pass banner,
   persistent failures) say `kind = 'refresh'`.
 - **Tests:** `server/keepa.test.ts` (the recorded product
   `server/__fixtures__/keepa/B08G6J2PY5.json`, pacing, 429, retries,
-  series_missing, partial, lane K claims, the tick, no `offers`, no key in
-  the client), `server/keepa.db.test.ts` (the real schema, rolled back),
+    series_missing, partial, lane K claims and order, the Bulk Calc job's
+  scope / skip / yield / tables, the tick, no `offers`, no key in
+  the client), `server/scheduler/bulk.test.ts` (one bulk Keepa job per
+  Refresh, the status with `keepa`), `server/scheduler/lanes.test.ts`
+  (a bulk job queued during the daily job starts when it ends),
+  `server/keepa.db.test.ts` (the real schema, rolled back),
   `server/keepa-trends.test.ts` (buckets, gaps, scales, the routes).
   `npm run keepa:spike` re-runs the spike; `--fixture-only` refreshes the
   fixture for 4 tokens.
@@ -5602,6 +5630,11 @@ page writes to `asins`, `asin_estimates`, `asin_estimates_history`,
 
 The single permitted main-DB access is one READ: a set-based EXISTS query
 (`WHERE asin = ANY($1)`) against `asins.asin` to populate `in_database`.
+The Keepa trend columns (2026-11-18) keep the guarantee from the other side:
+the list's Keepa job (§11 "Keepa jobs (lane K)" → Bulk Calc job) gets its
+ASIN list from the enqueue call, reads no bulk table, and writes only
+`keepa_series` / `keepa_fetch` — Keepa tables, neither bulk nor catalog;
+the cells read them through `GET /api/keepa/trends` like every other table.
 `in_database` is TRUE for ANY `asins` row regardless of status — active,
 parked, and dead all count (a dead ASIN is still "in your database").
 

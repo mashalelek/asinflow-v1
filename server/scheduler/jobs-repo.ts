@@ -52,7 +52,8 @@ export async function enqueueJob(input: EnqueueInput, query: QueryLike = default
  * instance never claims the same row. Several running rows — one per lane —
  * are normal. A lane is its kind + trigger set (LANE_KIND / LANE_TRIGGERS);
  * in lane K a queued new-ASIN job (trigger onboarding) goes ahead of a queued
- * daily job (patch "Jobs": a new-ASIN job goes ahead of the daily job).
+ * daily job, and the daily job ahead of a queued Bulk Calc job (trigger bulk)
+ * — KEEPA_TRIGGER_ORDER (patch "Jobs"; Bulk Calc rules, Maria 2026-11-18).
  */
 export async function claimNextJob(query: QueryLike, lane: Lane): Promise<JobRow | null> {
   await query("BEGIN");
@@ -60,7 +61,7 @@ export async function claimNextJob(query: QueryLike, lane: Lane): Promise<JobRow
     const r = await query(
       `SELECT ${COLS} FROM jobs
         WHERE status IN ('running','queued') AND trigger = ANY($1::text[]) AND kind = $2
-        ORDER BY (status = 'running') DESC, (kind = 'keepa' AND trigger = 'onboarding') DESC, queued_at ASC, id ASC
+        ORDER BY (status = 'running') DESC, (kind = 'keepa' AND trigger = 'onboarding') DESC, (kind = 'keepa' AND trigger = 'scheduled') DESC, queued_at ASC, id ASC
         LIMIT 1 FOR UPDATE SKIP LOCKED`,
       [Array.from(LANE_TRIGGERS[lane]), LANE_KIND[lane]],
     );
@@ -159,6 +160,26 @@ export async function enqueueDailyKeepaJob(query: QueryLike = defaultQuery as an
   const existing = await activeDailyKeepaJob(query);
   if (existing) return { job: existing, existing: true };
   return { job: await enqueueJob({ kind: "keepa", trigger: "scheduled", includeDaily: false, scopeAsins: null }, query), existing: false };
+}
+
+/**
+ * ONE Keepa job for a Bulk Calc list's ASINs (trigger bulk; Maria 2026-11-18): enqueued beside the list's refresh
+ * job when the list is created (its first refresh) and on every Refresh click. The job's ASIN list is THIS call's
+ * argument — the job reads no bulk table (SPEC §21 isolation) — and `bulk_list_id` is carried only so the list's
+ * status route can show it; `target` stays 'main' so nothing treats it as a bulk-target refresh job. A bulk job
+ * still QUEUED for the same list is reused (its scope widened), never duplicated; a running one is left alone.
+ */
+export async function enqueueBulkKeepaJob(listId: string, asins: readonly string[], query: QueryLike = defaultQuery as any): Promise<{ job: JobRow | null; existing: boolean }> {
+  const scope = Array.from(new Set(asins.map((a) => String(a).trim().toUpperCase()).filter(Boolean)));
+  if (scope.length === 0) return { job: null, existing: false };
+  const r = await query(`SELECT ${COLS} FROM jobs WHERE kind = 'keepa' AND trigger = 'bulk' AND bulk_list_id = $1 AND status = 'queued' ORDER BY id LIMIT 1`, [listId]);
+  if (r.rows.length) {
+    const queued = toRow(r.rows[0]);
+    const merged = Array.from(new Set([...(queued.scope_asins ?? []), ...scope]));
+    if (merged.length !== (queued.scope_asins ?? []).length) await query(`UPDATE jobs SET scope_asins = $2 WHERE id = $1 AND status = 'queued'`, [queued.id, merged]);
+    return { job: { ...queued, scope_asins: merged }, existing: true };
+  }
+  return { job: await enqueueJob({ kind: "keepa", trigger: "bulk", bulkListId: listId, includeDaily: false, scopeAsins: scope }, query), existing: false };
 }
 
 /**

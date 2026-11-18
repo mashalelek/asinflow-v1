@@ -18,7 +18,7 @@ import { getEligibility as realGetEligibility } from "../spapi";
 import { runPricePass as realRunPricePass } from "../price-sync";
 import { runFeesPass as realRunFeesPass } from "../refresh-job";
 import { getFeePriceForAsin } from "@shared/schema";
-import { enqueueJob, listActive, recordComponentRun, laneAhead } from "./jobs-repo";
+import { enqueueJob, listActive, recordComponentRun, laneAhead, enqueueBulkKeepaJob } from "./jobs-repo";
 import type { JobRow, QueryLike, ComponentResult } from "./types";
 
 export interface BulkScope {
@@ -217,14 +217,14 @@ export async function copyMainToBulk(listId: string, asins: string[], query: Que
 }
 
 export type EnqueueBulkResult =
-  | { kind: "queued"; job: JobRow; ahead: number }
+  | { kind: "queued"; job: JobRow; ahead: number; keepaJob: JobRow | null }
   | { kind: "busy"; jobId: number; status: string }
   | { kind: "empty" };
 
 /** POST /api/bulk-lists/:id/refresh — scope 'failed' | 'all' | explicit asins. */
 export async function enqueueBulkRefresh(
   listId: string,
-  opts: { scope: "failed" | "all"; asins?: string[]; requestedBy?: number | null },
+  opts: { scope: "failed" | "all"; asins?: string[]; requestedBy?: number | null; keepaEnabled?: () => boolean },
   query: QueryLike = defaultQuery as any,
 ): Promise<EnqueueBulkResult> {
   const active = (await listActive(query)).find((j) => j.target === "bulk" && j.bulk_list_id === listId);
@@ -244,29 +244,50 @@ export async function enqueueBulkRefresh(
     scopeAsins: scoped.map((r: any) => String(r.asin)), requestedBy: opts.requestedBy ?? null,
   }, query);
   const ahead = laneAhead(job, await listActive(query)); // lane M only — the scheduled pass never delays a bulk job
-  return { kind: "queued", job, ahead };
+  // Keepa (Maria 2026-11-18): the list's creation (its first refresh) and every Refresh click enqueue ONE Keepa job
+  // for the WHOLE list on lane K beside this job — the job skips what was fetched since 00:00 ET, so the list's
+  // catalog ASINs cost nothing extra; bulk-only ASINs are as of the list's last run. The ASIN list travels in the
+  // enqueue call (the Keepa job reads no bulk table, SPEC §21). Only with a key; a failure here never fails the refresh.
+  let keepaJob: JobRow | null = null;
+  if ((opts.keepaEnabled ?? (() => !!process.env.KEEPA_API_KEY))()) {
+    try { keepaJob = (await enqueueBulkKeepaJob(listId, rows.map((r: any) => String(r.asin)), query)).job; }
+    catch (err: any) { console.error(`[bulk] Keepa job for list ${listId} not enqueued: ${err?.message ?? err}`); }
+  }
+  return { kind: "queued", job, ahead, keepaJob };
 }
 
 export interface BulkStatus {
   jobId: number; status: string; stage: string; current: number; total: number;
   startedAt: string | Date | null; finishedAt: string | Date | null; error: string | null;
+  /** The list's Keepa job (kind keepa, trigger bulk, 2026-11-18) while it is queued / running or ended in the last 60 s — shown after the refresh job. */
+  keepa?: BulkStatus | null;
 }
 
-/** GET /api/bulk-lists/:id/refresh/status — the list's active job, else its last job if it ended in the last 60 s. */
-export async function bulkRefreshStatus(listId: string, query: QueryLike = defaultQuery as any): Promise<BulkStatus | null> {
-  const r = await query(
-    `SELECT id, status, progress, started_at, finished_at, error FROM jobs
-      WHERE target = 'bulk' AND bulk_list_id = $1
+const BULK_STATUS_SQL = (where: string) => `SELECT id, kind, status, progress, started_at, finished_at, error FROM jobs
+      WHERE ${where} AND bulk_list_id = $1
         AND (status IN ('queued','running') OR finished_at > NOW() - INTERVAL '60 seconds')
-      ORDER BY (status IN ('queued','running')) DESC, queued_at DESC LIMIT 1`,
-    [listId],
-  );
-  const j = r.rows[0];
-  if (!j) return null;
+      ORDER BY (status IN ('queued','running')) DESC, queued_at DESC LIMIT 1`;
+
+function toBulkStatus(j: any): BulkStatus {
   const p = (j.progress ?? {}) as { component?: number; position?: number; total?: number };
-  const stage = j.status === "queued" ? "queued" : (j.status === "running" ? (p.component != null ? `component ${p.component}` : "starting") : j.status);
+  const running = j.kind === "keepa" ? "Keepa history" : (p.component != null ? `component ${p.component}` : "starting");
+  const stage = j.status === "queued" ? "queued" : (j.status === "running" ? running : j.status);
   return {
     jobId: Number(j.id), status: String(j.status), stage, current: p.position ?? 0, total: p.total ?? 0,
     startedAt: j.started_at ?? null, finishedAt: j.finished_at ?? null, error: j.error ?? null,
   };
+}
+
+/**
+ * GET /api/bulk-lists/:id/refresh/status — the list's active refresh job, else its last one if it ended in the last
+ * 60 s; `keepa` = the list's Keepa job by the same rule. With no refresh job to show but a Keepa job, the body is the
+ * Keepa job's status with `keepa` set too, so the page keeps polling and shows "Keepa history N/M".
+ */
+export async function bulkRefreshStatus(listId: string, query: QueryLike = defaultQuery as any): Promise<BulkStatus | null> {
+  const refresh = (await query(BULK_STATUS_SQL("target = 'bulk' AND kind = 'refresh'"), [listId])).rows[0];
+  const keepa = (await query(BULK_STATUS_SQL("kind = 'keepa' AND trigger = 'bulk'"), [listId])).rows[0];
+  if (!refresh && !keepa) return null;
+  const k = keepa ? toBulkStatus(keepa) : null;
+  if (!refresh) return { ...k!, keepa: k };
+  return { ...toBulkStatus(refresh), keepa: k };
 }

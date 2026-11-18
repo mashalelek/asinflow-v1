@@ -8,12 +8,12 @@ vi.mock("./db", () => ({ query: vi.fn(async () => ({ rows: [], rowCount: 0 })), 
 import {
   KEEPA_SERIES, KEEPA_BATCH, KEEPA_EPOCH_MIN, keepaTimeToMs, keepaProductUrl, fetchKeepaProducts, KeepaError, keepaDeps,
   etDayOf, etDayStartMs, changePointsToDaily, productToSeries, storeKeepaProduct, fetchKeepaForAsins, dueAsins, fetchThreshold,
-  waitMsForTokens, freshTokenState, runKeepaJob, runQueuedNewAsinJobs, keepaTx, type KeepaProduct, type TokenState,
+  waitMsForTokens, freshTokenState, runKeepaJob, runQueuedNewAsinJobs, resolveKeepaScope, keepaTx, type KeepaProduct, type TokenState,
 } from "./keepa";
 import { runKeepaDailyTick, setScheduleLogger } from "./scheduler/schedule";
 import { COMPONENTS } from "./scheduler/components";
 import { componentsForJob } from "./scheduler/runner";
-import { KEEPA_COMPONENTS, laneOf, LANE_TRIGGERS, LANE_KIND, type JobRow, type QueryLike, type ComponentContext } from "./scheduler/types";
+import { KEEPA_COMPONENTS, laneOf, LANE_TRIGGERS, LANE_KIND, keepaTriggersAhead, type JobRow, type QueryLike, type ComponentContext } from "./scheduler/types";
 import { claimNextJob, enqueueDailyKeepaJob, enqueueNewAsinKeepaJob } from "./scheduler/jobs-repo";
 
 setScheduleLogger(() => {});
@@ -275,10 +275,25 @@ describe("the job: order, not_due, restart, inline new-ASIN jobs, keepa_incomple
     expect(r.due).toEqual(["B000000001", "B000000003", "B000000002"]);
     expect(r.notDue).toEqual(["B000000004"]);
   });
-  it("threshold: the daily job = 00:00 ET today; a new-ASIN job = its queued_at — so a restart refetches nothing already fetched", () => {
+  it("threshold: the daily job and a Bulk Calc job = 00:00 ET today; a new-ASIN job = its queued_at — so a restart refetches nothing already fetched", () => {
     const now = new Date("2026-11-18T21:00:00Z");
     expect(fetchThreshold(row({ trigger: "scheduled" }), now).toISOString()).toBe("2026-11-18T05:00:00.000Z");
+    expect(fetchThreshold(row({ trigger: "bulk", queued_at: new Date("2026-11-18T15:00:00Z") }), now).toISOString()).toBe("2026-11-18T05:00:00.000Z");
     expect(fetchThreshold(row({ trigger: "onboarding", queued_at: new Date("2026-11-18T15:00:00Z") }), now).toISOString()).toBe("2026-11-18T15:00:00.000Z");
+  });
+
+  it("Bulk Calc job scope (SPEC §21): the enqueue call's ASIN list verbatim — no bulk table, no catalog table is read", async () => {
+    const seen: string[] = [];
+    const q: QueryLike = async (text) => { seen.push(text); return { rows: [], rowCount: 0 }; };
+    expect(await resolveKeepaScope(q, { trigger: "bulk", scope_asins: ["b0bulkonly1", "B0BULKONLY1", " B0INCATALOG "] })).toEqual(["B0BULKONLY1", "B0INCATALOG"]);
+    expect(seen).toEqual([]);
+    expect(keepaTriggersAhead("onboarding")).toEqual([]);
+    expect(keepaTriggersAhead("scheduled")).toEqual(["onboarding"]);
+    expect(keepaTriggersAhead("bulk")).toEqual(["onboarding", "scheduled"]);
+    // the module names no bulk table and no catalog write
+    const src = readFileSync(join(__dirname, "keepa.ts"), "utf8");
+    expect(src).not.toMatch(/bulk_list/);
+    expect(src).not.toMatch(/(INSERT INTO|UPDATE|DELETE FROM) (asins|asin_estimates|bulk_)/);
   });
 
   function ctxFor(job: JobRow, scope: string[], q: QueryLike): ComponentContext & { checkpoints: string[]; progress: any[] } {
@@ -341,7 +356,45 @@ describe("the job: order, not_due, restart, inline new-ASIN jobs, keepa_incomple
     jobs.push({ id: 51, trigger: "onboarding", queued_at: new Date("2026-11-18T20:30:00Z"), scope_asins: ["B0NEWASIN2"], status: "queued" });
     const r = await runKeepaJob(ctx, "33_keepa");
     expect(order.slice(1)).toEqual(["B0NEWASIN2", "B08G6J2PY5"]); // the new-ASIN job first, then the daily batch
-    expect(r.counts.new_asin_jobs_inline).toBe(1);
+    expect(r.counts.jobs_ahead_inline).toBe(1);
+    delete process.env.KEEPA_API_KEY;
+  });
+
+  it("a Bulk Calc job: skips the list's ASINs fetched since 00:00 ET, yields to a queued daily job and a queued new-ASIN job (new-ASIN first), and touches only keepa_series / keepa_fetch / jobs / refresh_runs", async () => {
+    process.env.KEEPA_API_KEY = "K";
+    const st = fakeStore();
+    keepaTx.run = st.tx;
+    st.fetchRows.set("B0INCATALOG", { fetched_at: new Date("2026-11-18T06:00:00Z"), status: "fetched", error: null }); // the daily job had it today
+    const jobs: any[] = [
+      { id: 60, trigger: "scheduled", queued_at: new Date("2026-11-18T05:00:00Z"), scope_asins: null, status: "queued" },
+      { id: 61, trigger: "onboarding", queued_at: new Date("2026-11-18T20:10:00Z"), scope_asins: ["B0NEWASIN1"], status: "queued" },
+    ];
+    const tables: string[] = [];
+    const finished: any[] = [];
+    const q: QueryLike = async (sql, params = []) => {
+      const s = sql.replace(/\s+/g, " ").trim();
+      Array.from(s.matchAll(/(?:FROM|INTO|UPDATE|JOIN) ([a-z_]+)/g)).forEach((m) => tables.push(m[1]));
+      if (s.startsWith("SELECT id, trigger, queued_at, scope_asins FROM jobs WHERE kind = 'keepa'")) return { rows: jobs.filter((j) => j.status === "queued" && (params[0] as string[]).includes(j.trigger)).sort((a, b) => (a.trigger === "onboarding" ? 0 : 1) - (b.trigger === "onboarding" ? 0 : 1)), rowCount: 0 };
+      if (s.startsWith("UPDATE jobs SET status = 'running'")) { const j = jobs.find((x) => x.id === params[0] && x.status === "queued"); if (!j) return { rows: [], rowCount: 0 }; j.status = "running"; return { rows: [{ id: j.id }], rowCount: 1 }; }
+      if (s.startsWith("SELECT asin FROM asins WHERE status IN")) return { rows: [{ asin: "B0INCATALOG" }], rowCount: 0 };
+      if (s.startsWith("SELECT asin FROM asins WHERE asin = ANY")) return { rows: (params[0] as string[]).map((asin) => ({ asin })), rowCount: 0 };
+      if (s.startsWith("UPDATE jobs SET progress")) return { rows: [], rowCount: 1 };
+      if (s.startsWith("INSERT INTO refresh_runs")) return { rows: [], rowCount: 1 };
+      if (s.startsWith("UPDATE jobs SET status = $2, summary")) { finished.push({ id: params[0], status: params[1] }); jobs.find((x) => x.id === params[0]).status = params[1]; return { rows: [], rowCount: 1 }; }
+      return st.q(sql, params);
+    };
+    const order: string[] = [];
+    keepaDeps.fetch = async (url) => { const asins = new URL(url).searchParams.get("asin")!.split(","); order.push(asins.join(",")); return reply(asins.map((a) => ({ ...product, asin: a }))); };
+    const ctx = ctxFor(row({ trigger: "bulk", queued_at: new Date("2026-11-18T20:00:00Z"), scope_asins: ["B0BULKONLY1", "B0INCATALOG"] }), ["B0BULKONLY1", "B0INCATALOG"], q);
+    const r = await runKeepaJob(ctx, "33_keepa");
+    expect(order).toEqual(["B0NEWASIN1", "B0BULKONLY1"]); // the new-ASIN job, then the daily job (its one ASIN already fetched today → nothing), then the list
+    expect(r.counts).toMatchObject({ fetched: 1, not_due: 1, jobs_ahead_inline: 2 });
+    expect(r.counts.keepa_incomplete).toBeUndefined(); // only the daily job records it
+    expect(finished.map((f) => [f.id, f.status])).toEqual([[61, "done"], [60, "done"]]);
+    // the ASIN writes (keepa_series + keepa_fetch) go through the per-ASIN transaction (st.tx); the pool saw: `asins`
+    // = the inline DAILY job's scope read, jobs / refresh_runs = the ledger, keepa_fetch = due / not-due; nothing bulk_*
+    expect(Array.from(new Set(tables)).filter((t) => t !== "unnest").sort()).toEqual(["asins", "jobs", "keepa_fetch", "refresh_runs"]);
+    expect(Array.from(st.seriesRows.keys()).sort()).toEqual(["B0BULKONLY1", "B0NEWASIN1"]);
     delete process.env.KEEPA_API_KEY;
   });
 });
@@ -352,7 +405,8 @@ describe("lane K and the job plumbing", () => {
     expect(laneOf({ kind: "keepa", trigger: "onboarding" })).toBe("K");
     expect(laneOf({ kind: "refresh", trigger: "scheduled" })).toBe("S");
     expect(laneOf({ kind: "refresh", trigger: "onboarding" })).toBe("M");
-    expect(LANE_TRIGGERS.K).toEqual(["scheduled", "onboarding"]);
+    expect(LANE_TRIGGERS.K).toEqual(["scheduled", "onboarding", "bulk"]); // + Bulk Calc jobs (Maria 2026-11-18)
+    expect(laneOf({ kind: "keepa", trigger: "bulk" })).toBe("K");
     expect(LANE_KIND).toEqual({ S: "refresh", M: "refresh", K: "keepa" });
   });
   it("claimNextJob('K') claims kind keepa only, a queued new-ASIN job ahead of a queued daily job; lanes S / M claim kind refresh", async () => {
@@ -361,8 +415,8 @@ describe("lane K and the job plumbing", () => {
     await claimNextJob(q, "K");
     const claim = sql.find((s) => s.text.includes("FROM jobs"))!;
     expect(claim.text).toMatch(/AND kind = \$2/);
-    expect(claim.text).toMatch(/\(kind = 'keepa' AND trigger = 'onboarding'\) DESC, queued_at ASC/);
-    expect(claim.params).toEqual([["scheduled", "onboarding"], "keepa"]);
+    expect(claim.text).toMatch(/\(kind = 'keepa' AND trigger = 'onboarding'\) DESC, \(kind = 'keepa' AND trigger = 'scheduled'\) DESC, queued_at ASC/); // new-ASIN, daily, bulk
+    expect(claim.params).toEqual([["scheduled", "onboarding", "bulk"], "keepa"]);
     sql.length = 0;
     await claimNextJob(q, "S");
     expect(sql.find((s) => s.text.includes("FROM jobs"))!.params).toEqual([["scheduled"], "refresh"]);

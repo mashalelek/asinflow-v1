@@ -65,6 +65,9 @@ export interface RunnerHandle {
 
 /** The ordered scope for a job: explicit ASINs or the scheduled rule, both ordered by asins.id. */
 export async function resolveScope(job: JobRow, query: QueryLike): Promise<string[]> {
+  // A Bulk Calc Keepa job (kind keepa, trigger bulk, 2026-11-18): its ASIN list came with the enqueue call and is
+  // used verbatim — bulk-only ASINs are not in `asins`, and the job reads no bulk table (SPEC §21 isolation).
+  if (job.kind === "keepa" && job.trigger === "bulk") return Array.from(new Set((job.scope_asins ?? []).map((a) => String(a).trim().toUpperCase()).filter(Boolean)));
   if (job.scope_asins && job.scope_asins.length > 0) {
     const r = await query(`SELECT asin FROM asins WHERE asin = ANY($1::text[]) ORDER BY id`, [job.scope_asins]);
     return r.rows.map((x: any) => String(x.asin));

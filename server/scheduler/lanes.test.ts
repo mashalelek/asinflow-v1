@@ -39,7 +39,7 @@ describe("lanes", () => {
     await claimNextJob(q, "M");
     const claim = sql.find((s) => s.text.includes("FROM jobs"))!;
     expect(claim.text).toMatch(/status IN \('running','queued'\) AND trigger = ANY\(\$1::text\[\]\) AND kind = \$2/);
-    expect(claim.text).toMatch(/ORDER BY \(status = 'running'\) DESC, \(kind = 'keepa' AND trigger = 'onboarding'\) DESC, queued_at ASC, id ASC/);
+    expect(claim.text).toMatch(/ORDER BY \(status = 'running'\) DESC, \(kind = 'keepa' AND trigger = 'onboarding'\) DESC, \(kind = 'keepa' AND trigger = 'scheduled'\) DESC, queued_at ASC, id ASC/); // lane K: new-ASIN, daily, bulk
     expect(claim.params).toEqual([["manual", "onboarding", "bulk"], "refresh"]);
     sql.length = 0;
     await claimNextJob(q, "S");
@@ -147,6 +147,8 @@ describe("the schedule tick looks at lane S only", () => {
 function fakePool(seed: JobRow[], scope: string[]) {
   const jobs = seed.map((j) => ({ ...j }));
   const claims: Array<{ id: number; lane: string[]; kind: string }> = [];
+  // lane K's claim order (the SQL's two DESC flags): new-ASIN 0, daily 1, bulk 2; refresh kinds all 2 (queue order)
+  const kp = (j: any) => (j.kind === "keepa" && j.trigger === "onboarding" ? 0 : j.kind === "keepa" && j.trigger === "scheduled" ? 1 : 2);
   const q = async (text: string, params: any[] = []) => {
     const s = text.replace(/\s+/g, " ").trim();
     if (/pg_try_advisory_lock/.test(s)) return { rows: [{ ok: true }], rowCount: 1 };
@@ -156,7 +158,7 @@ function fakePool(seed: JobRow[], scope: string[]) {
       const want: string[] = params[0];
       const kind: string = params[1];
       const c = jobs.filter((j) => (j.status === "running" || j.status === "queued") && want.includes(j.trigger) && j.kind === kind)
-        .sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1) || ((b.kind === "keepa" && b.trigger === "onboarding") ? 1 : 0) - ((a.kind === "keepa" && a.trigger === "onboarding") ? 1 : 0) || +new Date(a.queued_at) - +new Date(b.queued_at) || a.id - b.id);
+        .sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1) || kp(a) - kp(b) || +new Date(a.queued_at) - +new Date(b.queued_at) || a.id - b.id);
       if (c[0]) claims.push({ id: c[0].id, lane: want, kind });
       return { rows: c.slice(0, 1), rowCount: c.length ? 1 : 0 };
     }
@@ -281,6 +283,26 @@ describe("two lanes in one runner", () => {
     const h = startRunner({ pool: f.pool, sellerId: "S", components: comps, pollMs: 10 });
     await waitFor(() => [11, 12].every((id) => f.jobs.find((j) => j.id === id)!.status === "done"));
     expect(order).toEqual([12, 11]);
+    await h.stop();
+  });
+
+  it("lane K order: new-ASIN, daily, bulk — a bulk job queued during the daily job starts when the daily job ends (Maria 2026-11-18)", async () => {
+    const order: number[] = [];
+    const gK = gate();
+    const comps = [stub(33, async (ctx) => { order.push(ctx.job.id); if (ctx.job.id === 21) await gK.p; return { counts: {}, outcomes: {} }; })];
+    const seed = [row({ id: 21, kind: "keepa", trigger: "scheduled", scope_asins: null, queued_at: new Date("2026-11-18T05:00:00Z") })];
+    const f = fakePool(seed, ["A1"]);
+    const h = startRunner({ pool: f.pool, sellerId: "S", components: comps, pollMs: 10 });
+    await waitFor(() => order.includes(21)); // the daily job runs
+    f.jobs.push(row({ id: 22, kind: "keepa", trigger: "bulk", bulk_list_id: "L1", scope_asins: ["B0BULKONLY1"], queued_at: new Date("2026-11-18T06:00:00Z") }));
+    f.jobs.push(row({ id: 23, kind: "keepa", trigger: "onboarding", scope_asins: ["A1"], queued_at: new Date("2026-11-18T06:00:01Z") }));
+    f.jobs.push(row({ id: 24, kind: "keepa", trigger: "scheduled", scope_asins: null, queued_at: new Date("2026-11-18T06:00:02Z") }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(f.jobs.filter((j) => j.id > 21).map((j) => j.status)).toEqual(["queued", "queued", "queued"]); // lane K is on #21
+    gK.open();
+    await waitFor(() => [22, 23, 24].every((id) => f.jobs.find((j) => j.id === id)!.status === "done"));
+    expect(order).toEqual([21, 23, 24, 22]); // then: the new-ASIN job, the (next) daily job, the bulk job last
+    expect(f.claims.filter((c) => c.id === 22).every((c) => c.kind === "keepa" && c.lane.includes("bulk"))).toBe(true);
     await h.stop();
   });
 
