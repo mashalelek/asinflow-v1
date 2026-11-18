@@ -28,8 +28,8 @@ import { poolForLane } from "./db";
 import { finishJob, recordComponentRun, writeProgress } from "./scheduler/jobs-repo";
 import type { ComponentContext, ComponentResult, JobRow, JobSummary, QueryLike } from "./scheduler/types";
 
-export const KEEPA_SERIES = ["buy_box", "new_price", "sales_rank", "monthly_sold", "offers_new", "offers_new_fba", "rating_count"] as const;
-export type KeepaSeries = (typeof KEEPA_SERIES)[number];
+import { KEEPA_SERIES, type KeepaSeries } from "@shared/keepa";
+export { KEEPA_SERIES, type KeepaSeries };
 /** Batch size (spike S5: 20 ASINs = 10.3 MB / 1.9 s, within the 30 MB / 10 s rule). */
 export const KEEPA_BATCH = 20;
 /** Tokens per ASIN with buybox=1&rating=1 (spike S3) — the pacing estimate until a reply says otherwise. */
