@@ -21,7 +21,6 @@ vi.mock("./log", () => ({ log: () => {} }));
 
 const EXPECTED_ROUTES = [
   "DELETE /api/bulk-lists/:id",
-  "DELETE /api/view-presets/:id",
   "GET /api/asins",
   "GET /api/asins/:asin/history",
   "GET /api/asins/check/:asin",
@@ -87,7 +86,6 @@ const EXPECTED_ROUTES = [
   "GET /api/suppression/sync",
   "GET /api/tags",
   "GET /api/velocity/plan",
-  "GET /api/view-presets",
   "POST /api/analyze",
   "POST /api/analyze/all",
   "POST /api/asins/:asin/cogs/reset",
@@ -122,7 +120,6 @@ const EXPECTED_ROUTES = [
   "POST /api/upload/velocity",
   "POST /api/velocity/bundle-identity/map",
   "POST /api/velocity/execute",
-  "POST /api/view-presets",
   "PUT /api/asins/:asin/buy-link",
   "PUT /api/asins/:asin/cogs",
   "PUT /api/asins/:asin/notes",
@@ -138,7 +135,6 @@ const EXPECTED_ROUTES = [
   "PUT /api/bulk-lists/:id/asins/:asin/notes",
   "PUT /api/bulk-lists/:id/asins/:asin/supplier-sku",
   "PUT /api/settings/hazmat",
-  "PUT /api/view-presets/:id",
 ];
 
 describe("route-registration inventory", () => {

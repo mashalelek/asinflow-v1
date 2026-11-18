@@ -24,7 +24,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - Scheduled refresh passes: 00:00 ET with the daily block, hourly 04–23 ET (`server/scheduler/schedule.ts`, gated by `ENABLE_CRONS=true`; off locally)
 - Toolbar buttons: Upload File, Analyze, Sync Inventory, Sync Sales (Sync POs removed 2026-11-13)
 - Date range selector with presets
-- Three view presets: Full View, Replenishment, Sourcing
+- Column visibility and order per user through the Columns panel (view presets removed 2026-11-18; `fba-column-config` in localStorage is the only column store, Bulk Calc and the Repricer tab have their own keys)
 - Combined Product cell with image, ASIN, SKU, title, icons (SAS, Keepa, meltable, hazmat, suppressed, catalog status)
 - Inline editing for: tags, notes, buy link (with query param stripping and domain extraction)
 - Keepa-style column filters (numeric/text/boolean operators)

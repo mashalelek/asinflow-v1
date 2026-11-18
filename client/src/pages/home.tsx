@@ -61,7 +61,6 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useDateRange } from "@/contexts/date-range-context";
 import { OPEN_SETTINGS_EVENT } from "@/components/layout/top-nav";
-import { ViewPresets } from "@/components/view-presets";
 import { StockHistoryModal } from "@/components/stock-history-modal";
 import { type ColFilter, type FilterMap, matchesFilters } from "@/components/column-filter";
 import { VisibilityToggles, loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, saveShowParked, loadShowDead, saveShowDead } from "@/components/visibility-toggles";
@@ -1916,16 +1915,7 @@ export default function Home() {
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Export moved to Row 1 (right group). */}
-                <ViewPresets
-                  columnConfig={columnConfig}
-                  onColumnConfigChange={setColumnConfig}
-                  onSortChange={(col, dir) => { setSortCol(col); setSortDir(dir); localStorage.setItem("fba-sort", JSON.stringify({ col, dir })); }}
-                  sortCol={sortCol}
-                  sortDir={sortDir}
-                  colFilters={colFilters}
-                  onColFiltersChange={setColFilters}
-                />
+                {/* Export moved to Row 1 (right group). The saved-views menu was removed 2026-11-18 (Maria); Columns is the only column control. */}
                 <ColumnManager config={columnConfig} onChange={setColumnConfig} />
               </div>
             </div>

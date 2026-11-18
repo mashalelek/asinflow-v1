@@ -350,10 +350,9 @@ URL via `cleanBuyLink` + `extractDomain` (§14), so editing Buy Link updates
 Supplier in the same round-trip, and clearing the URL blanks both.
 
 **Default hidden; available in the column picker.** (`defaultVisible: false`.)
-No per-view default is possible today: `ColumnDef.defaultVisible` is a single
-global boolean with no per-preset dimension — the §21 bulk page gets its own
-defaults only by rebuilding the column list with `BULK_DEFAULT_VISIBLE` — and
-there is only one default preset anyway (see "Default view presets").
+`ColumnDef.defaultVisible` is a single global boolean — the §21 bulk page gets
+its own defaults only by rebuilding the column list with `BULK_DEFAULT_VISIBLE`
+(see "Column configuration").
 
 Keepa-style text filter — the `getFilterType` default, no registration needed.
 Sorting and filtering read `getRowValue`, the one accessor (§14).
@@ -635,8 +634,8 @@ export and Manage Columns. **Default-visible wherever Stock/On Order are**
 (revised 2026-09-17 — it shipped default-hidden for one day). Present on
 every table built from the shared column defs — the ASINs page and the
 Repricer tab (§23); absent from Bulk Calc, which excludes the whole Stock
-group (§21). Saved view presets list columns explicitly and do not absorb
-new ones; adding it to a preset is a deliberate per-preset edit.
+group (§21). A saved column config absorbs a new column at its default
+position with its `defaultVisible` (`mergeStoredConfig`).
 
 ### Numeric cells render zero, never a dash (2026-09-17, final)
 
@@ -735,29 +734,34 @@ The `#` column shows position within the current filtered/sorted view (1 to N
 where N = total filtered count). Persists across pagination. Updates when
 sort/filter change. Non-sortable, non-filterable.
 
-### Default view presets
+### Column configuration (view presets removed 2026-11-18)
 
-**There is ONE default preset: Full View.** It defines initial column
-visibility, sort, and applied filters.
+**There are no view presets.** The view button on the ASINs toolbar
+("Custom" / "Full View" / "+ Save As New View"), its menu, the save / rename /
+delete flow, the four `/api/view-presets` routes and the `view_presets` table
+were removed on 2026-11-18 (`docs/claude_spec-patch-remove-view-presets-and-light-mode.md`,
+migration 120 drops the table). Maria used none of it.
 
-**Replenishment and Sourcing are no longer presets (removed 2026-05-23).**
-They were seeded as built-ins on 2026-04-04 and deleted in the B3 cutover by
-`database/delete_replenishment_sourcing_presets.sql`, with the rows backed up
-re-runnably in `database/backup_deleted_view_presets_20260523.sql`. Why each
-went:
-- **Replenishment** — its FILTER LOGIC moved to the Replens scorecard tile,
-  which calls `isReplens()` in `shared/profitability.ts`. §4 documents that
-  filter, and §4 is still live: it is a **filter reached from a scorecard
-  tile**, not a preset. Only the preset wrapper was removed.
-- **Sourcing** — carried no filter at all, just a column-visibility set, and
-  was unused.
+Each user's columns live in the browser: `fba-column-config` in localStorage
+(order + visible set, `client/src/lib/columns.ts`), written by the Columns
+panel (Manage Columns) — the only way to choose columns. Bulk Calc and the
+Repricer tab keep their own keys (`fba-bulk-column-config`,
+`fba-repricer-column-config`) and were never preset-driven. A user with no
+saved config gets `COLUMN_GROUPS` with each column's `defaultVisible`
+(`getDefaultConfig`). Column widths are per browser as before.
 
-Earlier wording in this section claimed three default presets; that was
-stale from 2026-05-23 until corrected 2026-10-03. `view_presets` currently
-holds exactly one row. User-saved presets are unaffected — they are created
-through `POST /api/view-presets` with `is_default = FALSE`, and the DELETE
-endpoint still blocks `is_default = TRUE` rows, which is why removing the
-built-ins needed that one-time script.
+**Nothing was reset by the removal.** Activating a preset always copied its
+columns into `fba-column-config` and the table always loaded from there, so
+the config never lived inside a preset record; removing the menu left every
+user's columns, order and widths exactly as they were
+(`client/src/lib/columns-no-presets.test.ts`). The old `fba-active-preset`
+marker is inert.
+
+History: Replenishment and Sourcing were seeded as built-in presets on
+2026-04-04 and deleted in the B3 cutover (2026-05-23). The Replenishment
+filter (§4) was never implemented as a preset — it is a filter reached from
+the Replens scorecard tile, `isReplens()` in `shared/profitability.ts` — and
+is untouched.
 
 The following columns are available in the column picker but are NOT included
 in the default preset — the user enables them per-need:
@@ -4006,7 +4010,7 @@ User-set only. No auto-detection from supplier domain or other heuristics.
   editable via popover with two checkboxes.
 - **Filter:** Multi-select dropdown — Wholesale / OA / Both / None, with
   counts. Same pattern as Tags and Supplier filters.
-- Not in any view preset by default.
+- Default hidden.
 
 ### Legacy "Wholesale" tag
 

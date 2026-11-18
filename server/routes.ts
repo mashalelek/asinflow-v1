@@ -3000,54 +3000,6 @@ export async function registerRoutes(
     } catch (err: any) { res.status(500).json({ message: err.message }); }
   });
 
-  // === View Presets ===
-  app.get("/api/view-presets", async (_req: Request, res: Response) => {
-    if (!isDbAvailable()) { res.json([]); return; }
-    try {
-      // created_by dropped by migration 050 (always NULL, never written).
-      const result = await query(`SELECT id, name, description, config, is_default, created_at FROM view_presets ORDER BY is_default DESC, name`);
-      res.json(result.rows);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
-  });
-
-  app.post("/api/view-presets", async (req: Request, res: Response) => {
-    const { name, config } = req.body as { name?: string; config?: any };
-    if (!name || !config) { res.status(400).json({ message: "name and config required" }); return; }
-    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    try {
-      const result = await query(
-        `INSERT INTO view_presets (name, config, is_default) VALUES ($1, $2, FALSE) RETURNING id, name, config, is_default`,
-        [name, JSON.stringify(config)]
-      );
-      res.json(result.rows[0]);
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
-  });
-
-  app.put("/api/view-presets/:id", async (req: Request, res: Response) => {
-    const { id } = req.params;
-    const { name, config } = req.body as { name?: string; config?: any };
-    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    try {
-      const updates: string[] = [];
-      const params: any[] = [id];
-      if (name) { params.push(name); updates.push(`name = $${params.length}`); }
-      if (config) { params.push(JSON.stringify(config)); updates.push(`config = $${params.length}`); }
-      if (updates.length === 0) { res.status(400).json({ message: "Nothing to update" }); return; }
-      updates.push(`updated_at = NOW()`);
-      await query(`UPDATE view_presets SET ${updates.join(", ")} WHERE id = $1`, params);
-      res.json({ ok: true });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
-  });
-
-  app.delete("/api/view-presets/:id", async (req: Request, res: Response) => {
-    const { id } = req.params;
-    if (!isDbAvailable()) { res.status(503).json({ message: "Database not available" }); return; }
-    try {
-      await query(`DELETE FROM view_presets WHERE id = $1 AND is_default = FALSE`, [id]);
-      res.json({ ok: true });
-    } catch (err: any) { res.status(500).json({ message: err.message }); }
-  });
-
   // === Stock/Sales History ===
   app.get("/api/asins/:asin/history", async (req: Request, res: Response) => {
     const { asin } = req.params;
