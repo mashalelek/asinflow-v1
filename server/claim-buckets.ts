@@ -7,7 +7,7 @@
 //     of the PO (a refund split), the timeline.
 import type { QueryLike } from "./scheduler/types";
 import { CLAIM_KINDS, REFUND_OUTCOMES } from "@shared/supplier-claim";
-import { claimSteps, daysSince, deriveBucket, nextAction, type BucketResult, type ClaimBucket, type ClaimStep } from "@shared/claim-bucket";
+import { claimSteps, daysSince, deriveBucket, newestPoFirst, nextAction, type BucketResult, type ClaimBucket, type ClaimStep } from "@shared/claim-bucket";
 import { stateSentence, primaryAction, needsAttentionGroup, stepActions, whatHappensNext, type PrimaryAction, type UiStep } from "@shared/claim-ui";
 import { addTask, loadClaimEvents, loadClaims, type ClaimEvent, type ClaimRow } from "./supplier-claims";
 import { sweepReturnByWarnings } from "./claim-returns";
@@ -29,13 +29,13 @@ const rowOf = (c: ClaimRow, now: Date): ClaimPageRow => {
     sentence: stateSentence(c, b), action: primaryAction(c, b), group: b.bucket === "needs_attention" ? needsAttentionGroup(c) : null, ui_steps: stepActions(c), next: whatHappensNext(c, b), days_open: daysSince(c.found_at, now) };
 };
 
-/** Every claim with its bucket, filtered by supplier / kind / PO (order # or id); default order: longest waiting first. */
+/** Every claim with its bucket, filtered by supplier / kind / PO (order # or id); default order: newest PO first, ties by claim # descending (`newestPoFirst`; was longest waiting first until 2026-11-18). */
 export async function loadClaimsPage(query: QueryLike, filters: ClaimsPageFilters = {}, now = new Date()): Promise<ClaimPageRow[]> {
   const rows = (await loadClaims(query, { all: true })).map((c) => rowOf(c, now));
   const sup = filters.supplier?.trim().toLowerCase() || null, kind = filters.kind?.trim() || null, po = filters.po?.trim() || null;
   return rows
     .filter((r) => (!sup || r.supplier.toLowerCase() === sup) && (!kind || r.kind === kind) && (!po || r.order_id === po || r.po_id === po || (r.alt_order_ids ?? "").split(/[\s,;/]+/).includes(po)))
-    .sort((a, b) => (a.bucket_since ?? a.found_at).localeCompare(b.bucket_since ?? b.found_at) || a.id - b.id);
+    .sort(newestPoFirst);
 }
 
 /** The header's "Refunds due $X · N open": the Dashboard's definition (open claims with no outcome or a refund outcome, Σ remaining). */

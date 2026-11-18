@@ -6642,9 +6642,15 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   first, then the rest, the converted claims still waiting on a quantity last (`decideOrder`). The list's columns are
   resizable through the PO table's `use-column-widths` hook (widths per browser under `claims-col-widths`, Reset
   widths beside the tabs; the grid reads `--claims-grid`), Product 240 px by default so names read, Step takes the
-  rest. Rows: Supplier · PO · Kind · Qty (Individual units, the
-  Product / ASIN equivalents in grey; "qty unknown" / "unknown (sheet zeroed the line)") · $ owed / remaining · Step
-  · Days in bucket · Next action; longest waiting first. Toolbar: **Open claim** (a PO picker over
+  rest. Rows: Supplier · PO (a copy icon beside the order #) · PO date (the PO's order date, M/D/YYYY as on the POs
+  list, muted, 80 px taken from Step; Maria 2026-11-18) · Product (a copy icon beside the ASIN) · Kind · Qty
+  (Individual units, the Product / ASIN equivalents in grey; "qty unknown" / "unknown (sheet zeroed the line)") · $
+  owed / remaining · Step · Days in bucket · Next action. **Default sort: newest PO first** (`newestPoFirst` in
+  `shared/claim-bucket.ts`: order date desc, ties by claim # desc) on every tab and inside each Needs attention group
+  (the five groups keep their order; it replaced longest waiting first 2026-11-18); the PO date and Waiting headers
+  sort asc / desc on a click like the POs list's (`nextClaimsSort` / `sortClaimRows` in `client/src/pages/claims.tsx`;
+  Waiting desc = longest waiting first), search and the tab counts unaffected. The copy icons are the ASINs page's
+  (`client/src/components/copy-value-button.tsx`), also beside the order # and the ASIN in the detail header. Toolbar: **Open claim** (a PO picker over
   `/api/pos/asin-rows/search`, then the line, kind, qty, $, note), filters supplier / kind / PO; `?bucket=a,b` shows
   several buckets at once (the Dashboard's Refunds due cell opens Waiting on refund to post + Waiting on supplier with
   the column's PO date range as `from` / `to`).

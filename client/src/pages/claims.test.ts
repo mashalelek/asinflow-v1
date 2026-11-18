@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decideOrder, matchesFilter, searchMatchHint, qtyText, prefillMethod, productText, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, claimsGrid, resizableClaimColumn, CLAIMS_COL_WIDTHS_KEY, NOTE_CLAMP_LINES, type ClaimRowApi } from "./claims";
+import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decideOrder, matchesFilter, matchesView, searchMatchHint, qtyText, prefillMethod, productText, sortClaimRows, nextClaimsSort, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, claimsGrid, resizableClaimColumn, CLAIMS_COL_WIDTHS_KEY, NOTE_CLAMP_LINES, type ClaimRowApi, type ClaimsSort } from "./claims";
+import { newestPoFirst } from "@shared/claim-bucket";
 
 // The Claims page (SPEC §22 "Supplier claims" §5 amended 2026-11-12, commit 2b): URL state, the filter box, the view's rows, the Needs attention groups, the labels, the table.
 const row = (over: Partial<ClaimRowApi>): ClaimRowApi => ({
@@ -118,17 +119,17 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(prefillMethod([{ method: "gift_card" }, { method: "card" }])).toBe("gift_card");
     expect(prefillMethod([])).toBe("card");
   });
-  it("the list is the mockup's grid with Product widened (28 · 140 · 240 · 120 · 100 · 110 · 1fr · 70 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header names its kind on the muted line above (the quantity-names rule wins there, Maria 2026-11-12); columns resizable through the PO table's hook, Step takes the rest", () => {
+  it("the list is the mockup's grid with Product widened and PO date added (28 · 140 · 80 · 240 · 120 · 100 · 110 · minmax(0,1fr) · 70 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header names its kind on the muted line above (the quantity-names rule wins there, Maria 2026-11-12); columns resizable through the PO table's hook, Step takes the rest", () => {
     expect(CLAIMS_TABLE_WIDTH).toBeLessThanOrEqual(1280 - 48);
-    expect(CLAIMS_TABLE_WIDTH).toBe(1084);
-    expect(CLAIMS_GRID).toBe("28px 140px 240px 120px 100px 110px 1fr 70px 180px");
+    expect(CLAIMS_TABLE_WIDTH).toBe(1176);
+    expect(CLAIMS_GRID).toBe("28px 140px 80px 240px 120px 100px 110px minmax(0, 1fr) 70px 180px");
     expect(CLAIM_COLUMNS.find((c) => c.id === "product")!.width).toBe(240);
-    expect(claimsGrid({ product: 320, waiting: 80 })).toBe("28px 140px 320px 120px 100px 110px 1fr 80px 180px");
-    expect(CLAIM_COLUMNS.filter(resizableClaimColumn).map((c) => c.id)).toEqual(["supplier", "product", "kind", "qty", "owed", "waiting", "do"]);
+    expect(claimsGrid({ product: 320, waiting: 80 })).toBe("28px 140px 80px 320px 120px 100px 110px minmax(0, 1fr) 80px 180px");
+    expect(CLAIM_COLUMNS.filter(resizableClaimColumn).map((c) => c.id)).toEqual(["supplier", "podate", "product", "kind", "qty", "owed", "waiting", "do"]);
     expect(CLAIMS_COL_WIDTHS_KEY).toBe("claims-col-widths");
     const hook = readFileSync("client/src/hooks/use-column-widths.tsx", "utf8");
     expect(hook).toContain('closest("th, [data-resize-col]")');
-    expect(CLAIM_COLUMNS.map((c) => c.label)).toEqual(["", "Supplier · PO", "Product", "Kind", "Qty", "Owed / left", "Step", "Waiting", "Do"]);
+    expect(CLAIM_COLUMNS.map((c) => c.label)).toEqual(["", "Supplier · PO", "PO date", "Product", "Kind", "Qty", "Owed / left", "Step", "Waiting", "Do"]);
     expect(CLAIM_COLUMNS.find((c) => c.id === "qty")!.kind).toBe("Individual units");
     const page = readFileSync("client/src/pages/claims.tsx", "utf8");
     const css = readFileSync("client/src/pages/claims.css", "utf8");
@@ -147,7 +148,7 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(page).toMatch(/data-resize-col=\{resizableClaimColumn\(c\) \? c\.id : undefined\}/);
     expect(page).toMatch(/\{resizableClaimColumn\(c\) && <ResizeHandle onMouseDown=\{\(e\) => handleResizeStart\(e, c\.id\)\} \/>\}/);
     expect(page).toMatch(/onClick=\{resetWidths\} data-testid="button-claims-reset-widths">Reset widths</);
-    expect(css).toContain(".cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 240px 120px 100px 110px 1fr 70px 180px)}");
+    expect(css).toContain(".cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 80px 240px 120px 100px 110px minmax(0,1fr) 70px 180px)}");
     // the timeline note sits in the entry column, wraps, clamps past 3 lines with "more" (Maria 2026-11-12: a 300-character summary fell into the dot column)
     expect(css).toContain(".cl .tl .n{width:auto;height:auto;border:0;border-radius:0;display:block;font-size:inherit;color:#a39f96}");
     expect(page).toContain("<TimelineNote id={e.id} text={`${note}${e.by_name ? ` · ${e.by_name}` : \"\"}`} email={e.gmail_message_id ? { id: e.gmail_message_id, mailbox: e.mailbox ?? \"\" } : null} />");
@@ -166,7 +167,7 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(page).toContain('<div className="cl" style={{ display: "flex", flexDirection: "column" }} data-testid="claims-page">');
     expect(page).toContain('<div className="cl" data-testid="claim-detail">');
     expect(page).toMatch(/className="hd" data-testid="claims-table"/);
-    expect(page).toContain('{c.kind && <span className="kind-line">{c.kind}</span>}{c.label}');
+    expect(page).toContain('{c.kind && <span className="kind-line">{c.kind}</span>}\n                {c.sortKey ? (');
     expect(css).toContain(".cl .hd .kind-line{display:block;font-size:9px;text-transform:none;letter-spacing:0;color:#6f6b63;line-height:1.2}");
     expect(page).toMatch(/className="row" style=\{\{ cursor: "pointer" \}\}/);
     expect(readFileSync("client/index.html", "utf8")).toContain("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
@@ -181,5 +182,86 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     const server = readFileSync("server/supplier-claims.ts", "utf8");
     const m = /REMOVABLE_EVENT_TYPES = \[([^\]]+)\]/.exec(server)!;
     expect(page).toContain(`const REMOVABLE_EVENTS = [${m[1]}];`);
+  });
+});
+
+// ── PO date column, newest-PO-first sort, header sort, copy icons (Maria 2026-11-18) ──
+describe("PO date column and sort (Maria 2026-11-18)", () => {
+  const page = readFileSync("client/src/pages/claims.tsx", "utf8");
+  it("PO date sits between Supplier · PO and Product, 80 px taken from Step, muted, the POs list's M/D/YYYY — rendered by the one row component every tab uses, Closed and Dismissed included", () => {
+    expect(CLAIM_COLUMNS.map((c) => c.id).slice(1, 4)).toEqual(["supplier", "podate", "product"]);
+    expect(CLAIM_COLUMNS.find((c) => c.id === "podate")).toMatchObject({ label: "PO date", width: 80, sortKey: "po_date" });
+    expect(CLAIM_COLUMNS.find((c) => c.id === "step")!.width).toBe("1fr"); // Step is still the flexible column; the 80 px came out of it
+    expect(CLAIMS_TABLE_WIDTH).toBe(1084 + 80 + 12);
+    expect(CLAIMS_TABLE_WIDTH).toBeLessThanOrEqual(1280 - 48);
+    expect(page).toContain('<span className="mut" data-testid={`claim-po-date-${c.id}`}>{fmtDate(c.order_date)}</span>');
+    expect(page).toContain("const fmtDate = (iso: string | null | undefined) => { if (!iso) return \"—\"; const [y, m, d] = iso.slice(0, 10).split(\"-\"); return `${Number(m)}/${Number(d)}/${y}`; };");
+    expect(readFileSync("client/src/pages/purchase-orders.tsx", "utf8")).toContain("const [y, m, d] = iso.slice(0, 10).split(\"-\");\n  return `${Number(m)}/${Number(d)}/${y}`;");
+    // every tab renders through ClaimRows: the Needs attention groups and the flat tabs both
+    expect(page).toMatch(/<ClaimRows rows=\{g\.rows\} q=\{s\.q\}/);
+    expect(page).toMatch(/\{data && !needsAttention && <ClaimRows rows=\{rows\} q=\{s\.q\}/);
+    for (const bucket of ["needs_attention", "waiting_supplier", "closed", "dismissed"] as const) {
+      const rows = [row({ id: 1, bucket, order_date: "2026-10-05" }), row({ id: 2, bucket, order_date: "2026-11-01" })];
+      expect(sortClaimRows(rowsForView(rows, readClaimsUrl(`?bucket=${bucket}`)), null).map((r) => [r.id, r.order_date])).toEqual([[2, "2026-11-01"], [1, "2026-10-05"]]);
+    }
+    // the mockup carries the column (header + one date per row), 80 px, between Supplier · PO and Product
+    const mock = readFileSync("docs/mockups/claims-list-2026-11-12.html", "utf8");
+    expect(mock).toContain("<span>Supplier · PO</span><span>PO date</span><span>Product</span>");
+    expect(mock.match(/grid-template-columns:28px 150px 80px 180px/g)).toHaveLength(2);
+    expect(mock.match(/<span class="mut">\d+\/\d+\/2026<\/span>/g)).toHaveLength(mock.match(/<div class="row">/g)!.length);
+  });
+  it("default order on every tab: newest PO first, ties by claim # descending — the server returns it and the client applies it", () => {
+    const rows = [row({ id: 5, order_date: "2026-10-05" }), row({ id: 9, order_date: "2026-11-02" }), row({ id: 7, order_date: "2026-11-02" }), row({ id: 1, order_date: "2026-11-09" }), row({ id: 3, order_date: "2026-10-05", days_in_bucket: 40, bucket_since: "2026-09-01" })];
+    expect(sortClaimRows(rows, null).map((r) => r.id)).toEqual([1, 9, 7, 5, 3]);
+    expect([...rows].sort(newestPoFirst).map((r) => r.id)).toEqual([1, 9, 7, 5, 3]);
+    expect(readFileSync("server/claim-buckets.ts", "utf8")).toContain(".sort(newestPoFirst);");
+    expect(page).toContain("const rows = useMemo(() => (data ? sortClaimRows(rowsForView(data.claims, s), sort) : []), [data, s, sort]);");
+    // search and the tab counts read the view filters only, never the sort
+    expect(page).toMatch(/for \(const r of data\?\.claims \?\? \[\]\) if \(matchesView\(r, s\)\)/);
+    expect(matchesView(rows[0], readClaimsUrl(""))).toBe(true);
+  });
+  it("Needs attention: the five groups keep their order; inside each the rows are newest PO first (Decide keeps its tiers on top of that)", () => {
+    const rows = sortClaimRows([
+      row({ id: 1, group: "timed_out", order_date: "2026-11-10" }), row({ id: 2, group: "supplier", order_date: "2026-10-01" }), row({ id: 3, group: "supplier", order_date: "2026-11-01" }),
+      row({ id: 4, group: "decide", status: "open", qty: 2, order_date: "2026-11-12" }), row({ id: 5, group: "decide", status: "suggested", qty: 4, order_date: "2026-09-01" }), row({ id: 6, group: "decide", status: "open", qty: 1, order_date: "2026-10-12" }),
+      row({ id: 7, group: "money", order_date: "2026-10-20" }), row({ id: 8, group: "velocity", order_date: "2026-10-21" }), row({ id: 9, group: "velocity", order_date: "2026-10-21" }),
+    ], null);
+    expect(groupNeedsAttention(rows).map((x) => [x.group, x.rows.map((r) => r.id)])).toEqual([["decide", [5, 4, 6]], ["supplier", [3, 2]], ["velocity", [9, 8]], ["money", [7]], ["timed_out", [1]]]);
+  });
+  it("the PO date and Waiting headers sort: a click cycles asc → desc → off (the POs list's rule); Waiting desc = longest waiting first; ties by claim # desc", () => {
+    let s: ClaimsSort = null;
+    s = nextClaimsSort(s, "po_date"); expect(s).toEqual({ key: "po_date", dir: "asc" });
+    s = nextClaimsSort(s, "po_date"); expect(s).toEqual({ key: "po_date", dir: "desc" });
+    s = nextClaimsSort(s, "waiting"); expect(s).toEqual({ key: "waiting", dir: "asc" });
+    s = nextClaimsSort(s, "waiting"); expect(s).toEqual({ key: "waiting", dir: "desc" });
+    s = nextClaimsSort(s, "waiting"); expect(s).toBeNull();
+    const rows = [row({ id: 1, order_date: "2026-11-09", bucket_since: "2026-11-15" }), row({ id: 2, order_date: "2026-10-05", bucket_since: "2026-10-20" }), row({ id: 3, order_date: "2026-11-02", bucket_since: null, found_at: "2026-11-01" }), row({ id: 4, order_date: "2026-10-05", bucket_since: "2026-10-20" })];
+    expect(sortClaimRows(rows, { key: "po_date", dir: "asc" }).map((r) => r.id)).toEqual([4, 2, 3, 1]);
+    expect(sortClaimRows(rows, { key: "po_date", dir: "desc" }).map((r) => r.id)).toEqual([1, 3, 4, 2]);
+    expect(sortClaimRows(rows, { key: "waiting", dir: "desc" }).map((r) => r.id)).toEqual([4, 2, 3, 1]); // longest waiting first, one click after asc
+    expect(sortClaimRows(rows, { key: "waiting", dir: "asc" }).map((r) => r.id)).toEqual([1, 3, 4, 2]);
+    expect(sortClaimRows(rows, null)).not.toBe(rows); // never sorts the caller's array in place
+    // the headers: only the two sortable columns carry the button and aria-sort; the arrows are the POs list's
+    expect(CLAIM_COLUMNS.filter((c) => c.sortKey).map((c) => [c.id, c.sortKey])).toEqual([["podate", "po_date"], ["waiting", "waiting"]]);
+    expect(page).toContain('onClick={() => setSort((cur) => nextClaimsSort(cur, c.sortKey!))}');
+    expect(page).toContain('data-testid={`sort-claims-${c.sortKey}`}');
+    expect(page).toContain('aria-sort={c.sortKey ? (sort?.key === c.sortKey ? (sort.dir === "asc" ? "ascending" : "descending") : "none") : undefined}');
+    expect(page).toContain('{sort?.key === c.sortKey ? (sort.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3" style={{ opacity: 0.3 }} />}');
+    expect(page).toContain("const [sort, setSort] = useState<ClaimsSort>(null);");
+    expect(readFileSync("client/src/pages/claims.css", "utf8")).toContain(".cl .hd .sort{");
+  });
+  it("copy icons: the ASINs page's CopyValueButton beside the PO order # and the ASIN on every list row and in the detail header; the click copies and never opens the row", () => {
+    const btn = readFileSync("client/src/components/copy-value-button.tsx", "utf8");
+    expect(btn).toContain("e.preventDefault();\n    e.stopPropagation();\n    navigator.clipboard.writeText(value)");
+    expect(btn).toContain("setTimeout(() => setCopied(false), COPIED_FOR_MS);");
+    expect(btn).toContain('{copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}');
+    expect(readFileSync("client/src/components/results-table.tsx", "utf8")).toContain("return <CopyValueButton value={asin} label=\"Copy ASIN\" testId={`btn-copy-asin-${asin}`} />;");
+    expect(page).toContain('<CopyValueButton value={c.order_id} label="Copy order #" testId={`btn-copy-order-${c.id}`} className="cp" />');
+    expect(page).toContain('{c.asin && p.sub === c.asin ? <CopyValueButton value={c.asin} label="Copy ASIN" testId={`btn-copy-asin-${c.id}`} className="cp" /> : null}');
+    expect(page).toContain('<CopyValueButton value={c.order_id} label="Copy order #" testId="btn-copy-order" className="cp" />');
+    expect(page).toContain('<CopyValueButton value={c.asin} label="Copy ASIN" testId="btn-copy-asin" className="cp" />');
+    expect(readFileSync("client/src/pages/claims.css", "utf8")).toContain(".cl .cp{");
+    // a whole-PO claim has no ASIN cell to copy
+    expect(productText(row({ po_line_item_id: null, kind: "canceled" })).sub).toBe("all lines");
   });
 });

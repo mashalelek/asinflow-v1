@@ -36,8 +36,10 @@ import { useToast } from "@/hooks/use-toast";
 import { replaceQuery } from "@/lib/list-scroll";
 import { fmtQty } from "@/lib/po-qty";
 import { useColumnWidths, ResizeHandle } from "@/hooks/use-column-widths";
+import { CopyValueButton } from "@/components/copy-value-button";
+import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { QTY_KIND } from "@shared/quantity-kinds";
-import { CLAIM_BUCKET_LABELS, CLAIM_BUCKET_TABS, TASK_GROUPS, TASK_GROUP_LABELS, type ClaimBucket, type ClaimStep, type TaskGroup } from "@shared/claim-bucket";
+import { CLAIM_BUCKET_LABELS, CLAIM_BUCKET_TABS, TASK_GROUPS, TASK_GROUP_LABELS, newestPoFirst, type ClaimBucket, type ClaimStep, type TaskGroup } from "@shared/claim-bucket";
 import { groupHint, velocityMessage, replacementMessage, sourceWord, carrierWord, type PrimaryAction, type UiStep, type StepHandler } from "@shared/claim-ui";
 import { carrierStatusText } from "@shared/carrier-status";
 import { carrierTrackingUrl } from "@/components/po-tracking";
@@ -136,16 +138,33 @@ export function rowsForView(rows: readonly ClaimRowApi[], s: ClaimsUrlState): Cl
 const suggestionWithFigures = (r: Pick<ClaimRowApi, "status" | "qty">) => r.status === "suggested" && r.qty != null;
 /** A converted badge claim still waiting on its quantity (open, no qty, enter_quantity open). */
 const waitingOnQuantity = (r: Pick<ClaimRowApi, "status" | "qty" | "tasks">) => r.status === "open" && r.qty == null && r.tasks.some((t) => t.kind === "enter_quantity" && !t.done_at);
-/** Decide's order (Maria 2026-11-12): suggestions with figures first, then the rest, the converted claims waiting on a quantity last; the server's order (longest waiting first) within each. */
+/** Decide's order (Maria 2026-11-12): suggestions with figures first, then the rest, the converted claims waiting on a quantity last; the list's sort (newest PO first by default) within each. */
 export function decideOrder(rows: readonly ClaimRowApi[]): ClaimRowApi[] {
   const tier = (r: ClaimRowApi) => (suggestionWithFigures(r) ? 0 : waitingOnQuantity(r) ? 2 : 1);
   return rows.map((r, i) => ({ r, i })).sort((a, b) => tier(a.r) - tier(b.r) || a.i - b.i).map((x) => x.r);
 }
-/** Needs attention grouped by the server's group (the primary action's task group; an unreported claim → Supplier). */
+// ── Sort (Maria 2026-11-18): newest PO first on every tab, ties by claim # descending; the PO date and Waiting headers toggle asc / desc like the POs list's ──
+export type ClaimsSort = { key: "po_date" | "waiting"; dir: "asc" | "desc" } | null;
+/** One key at a time; a click cycles asc → desc → off (off = the default order, newest PO first) — `nextPoSort`'s rule. */
+export function nextClaimsSort(cur: ClaimsSort, key: "po_date" | "waiting"): ClaimsSort {
+  if (!cur || cur.key !== key) return { key, dir: "asc" };
+  return cur.dir === "asc" ? { key, dir: "desc" } : null;
+}
+/** The rows in the list's order: the default is `newestPoFirst`; PO date asc = oldest PO first; Waiting desc = longest waiting first (the bucket's anchor, the claim's found date when it has none), asc the reverse; ties by claim # descending throughout. Search and the tab counts never depend on it. */
+export function sortClaimRows(rows: readonly ClaimRowApi[], sort: ClaimsSort): ClaimRowApi[] {
+  const out = [...rows];
+  if (!sort) return out.sort(newestPoFirst);
+  if (sort.key === "po_date") return out.sort((a, b) => (sort.dir === "asc" ? a.order_date.localeCompare(b.order_date) : b.order_date.localeCompare(a.order_date)) || b.id - a.id);
+  const since = (r: ClaimRowApi) => r.bucket_since ?? r.found_at;
+  // longest waiting (desc) = the earliest anchor first
+  return out.sort((a, b) => (sort.dir === "desc" ? since(a).localeCompare(since(b)) : since(b).localeCompare(since(a))) || b.id - a.id);
+}
+/** Needs attention grouped by the server's group (the primary action's task group; an unreported claim → Supplier); the five groups keep their order, the rows keep the list's sort inside each. */
 export function groupNeedsAttention(rows: readonly ClaimRowApi[]): Array<{ group: TaskGroup; rows: ClaimRowApi[] }> {
   return TASK_GROUPS.map((group) => { const g = rows.filter((r) => r.group === group); return { group, rows: group === "decide" ? decideOrder(g) : g }; }).filter((g) => g.rows.length > 0);
 }
 export const money = (v: number | string | null | undefined) => (v == null || v === "" ? "—" : `$${Number(v).toFixed(2)}`);
+/** M/D/YYYY — the POs list's `fmtDate`. */
 const fmtDate = (iso: string | null | undefined) => { if (!iso) return "—"; const [y, m, d] = iso.slice(0, 10).split("-"); return `${Number(m)}/${Number(d)}/${y}`; };
 const fmtMD = (iso: string | null | undefined) => { if (!iso) return "—"; const [, m, d] = iso.slice(0, 10).split("-"); return `${Number(m)}/${Number(d)}`; };
 const fmtWhen = (iso: string) => { const d = new Date(iso); const date = `${d.getMonth() + 1}/${d.getDate()}`; const t = d.getHours() || d.getMinutes() ? ` ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}` : ""; return date + t; };
@@ -181,25 +200,27 @@ export function productText(c: Pick<ClaimRowApi, "po_line_item_id" | "product_na
   return { main: c.product_name ?? c.asin ?? "line", sub: c.asin ?? "" };
 }
 
-// ── Columns: the mockup's grid, widened Product (Maria 2026-11-12): 28 · 140 · 240 · 120 · 100 · 110 · 1fr · 70 · 180, 12 px gaps ──
-// Resizable (the PO table's use-column-widths hook; widths per browser under CLAIMS_COL_WIDTHS_KEY); Step takes the rest.
+// ── Columns: the mockup's grid, widened Product (Maria 2026-11-12): 28 · 140 · 80 · 240 · 120 · 100 · 110 · 1fr · 70 · 180, 12 px gaps ──
+// PO date (Maria 2026-11-18) sits between Supplier · PO and Product; its 80 px came out of Step (the 1fr column), so the fixed part grew to 1,176 px.
+// Resizable (the PO table's use-column-widths hook; widths per browser under CLAIMS_COL_WIDTHS_KEY); Step takes the rest, as minmax(0, 1fr) so the grid never overflows the page.
 
-export const CLAIM_COLUMNS: ReadonlyArray<{ id: string; label: string; width: number | "1fr"; kind?: string }> = [
+export const CLAIM_COLUMNS: ReadonlyArray<{ id: string; label: string; width: number | "1fr"; kind?: string; /** The header sorts (asc / desc) on this key. */ sortKey?: "po_date" | "waiting" }> = [
   { id: "chk", label: "", width: 28 },
   { id: "supplier", label: "Supplier · PO", width: 140 },
+  { id: "podate", label: "PO date", width: 80, sortKey: "po_date" },
   { id: "product", label: "Product", width: 240 },
   { id: "kind", label: "Kind", width: 120 },
   { id: "qty", label: "Qty", width: 100, kind: QTY_KIND.individual },
   { id: "owed", label: "Owed / left", width: 110 },
   { id: "step", label: "Step", width: "1fr" },
-  { id: "waiting", label: "Waiting", width: 70 },
+  { id: "waiting", label: "Waiting", width: 70, sortKey: "waiting" },
   { id: "do", label: "Do", width: 180 },
 ];
 export const CLAIMS_COL_WIDTHS_KEY = "claims-col-widths";
-/** The fixed columns plus the gaps (the mockup's `.row` / `.hd`): 1,084 px, leaving the Step column ≥ 148 px at 1280 (page padding 24). */
+/** The fixed columns plus the gaps (the mockup's `.row` / `.hd`): 1,176 px, leaving the Step column ≥ 56 px at 1280 and ≥ 216 px at 1440 (page padding 24). */
 export const CLAIMS_TABLE_WIDTH = CLAIM_COLUMNS.reduce((t, c) => t + (c.width === "1fr" ? 0 : c.width), 0) + (CLAIM_COLUMNS.length - 1) * 12;
 /** The grid template: the saved widths over the defaults; Step is always the rest. */
-export const claimsGrid = (widths: Record<string, number> = {}): string => CLAIM_COLUMNS.map((c) => (c.width === "1fr" ? "1fr" : `${widths[c.id] ?? c.width}px`)).join(" ");
+export const claimsGrid = (widths: Record<string, number> = {}): string => CLAIM_COLUMNS.map((c) => (c.width === "1fr" ? "minmax(0, 1fr)" : `${widths[c.id] ?? c.width}px`)).join(" ");
 export const CLAIMS_GRID = claimsGrid();
 /** Which columns carry a resize handle: every fixed-width one but the checkbox. */
 export const resizableClaimColumn = (c: { id: string; width: number | "1fr" }) => c.width !== "1fr" && c.id !== "chk";
@@ -387,7 +408,8 @@ function ClaimsList() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { replaceQuery("/claims", writeClaimsUrl(s)); }, [s]);
-  const rows = useMemo(() => (data ? rowsForView(data.claims, s) : []), [data, s]);
+  const [sort, setSort] = useState<ClaimsSort>(null);
+  const rows = useMemo(() => (data ? sortClaimRows(rowsForView(data.claims, s), sort) : []), [data, s, sort]);
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const r of data?.claims ?? []) if (matchesView(r, s)) c[r.bucket] = (c[r.bucket] ?? 0) + 1;
@@ -426,8 +448,13 @@ function ClaimsList() {
         {data && (
           <div className="hd" data-testid="claims-table">
             {CLAIM_COLUMNS.map((c) => (
-              <span key={c.id} data-testid={`th-claims-${c.id}`} data-resize-col={resizableClaimColumn(c) ? c.id : undefined} style={{ position: "relative" }}>
-                {c.kind && <span className="kind-line">{c.kind}</span>}{c.label}
+              <span key={c.id} data-testid={`th-claims-${c.id}`} data-resize-col={resizableClaimColumn(c) ? c.id : undefined} style={{ position: "relative" }} aria-sort={c.sortKey ? (sort?.key === c.sortKey ? (sort.dir === "asc" ? "ascending" : "descending") : "none") : undefined}>
+                {c.kind && <span className="kind-line">{c.kind}</span>}
+                {c.sortKey ? (
+                  <button type="button" className="sort" onClick={() => setSort((cur) => nextClaimsSort(cur, c.sortKey!))} title={c.sortKey === "waiting" ? "Sort by days waiting (desc = longest waiting first)" : "Sort by the PO's order date"} data-testid={`sort-claims-${c.sortKey}`}>
+                    {c.label}{sort?.key === c.sortKey ? (sort.dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3" style={{ opacity: 0.3 }} />}
+                  </button>
+                ) : c.label}
                 {resizableClaimColumn(c) && <ResizeHandle onMouseDown={(e) => handleResizeStart(e, c.id)} />}
               </span>))}
           </div>)}
@@ -475,15 +502,16 @@ function ClaimRows({ rows, q = "", onRow, refresh, onRefund }: { rows: ClaimRowA
         return (
           <div key={c.id} className="row" style={{ cursor: "pointer" }} onClick={() => onRow(c)} data-testid={`row-claim-${c.id}`}>
             <span className="chk" aria-hidden="true" />
-            <span style={{ minWidth: 0 }} onClick={(e) => e.stopPropagation()}><span style={{ display: "block", ...ell }} title={`claim #${c.id} · ${c.supplier}`}><span className="mut num" data-testid={`claim-number-${c.id}`}>#{c.id}</span> {c.supplier}</span><Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ display: "block", ...ell }} title={c.order_id}>{c.order_id}</Link>{searchMatchHint(c, q) ? <span className="mut" style={{ display: "block", fontSize: 11, ...ell }} data-testid={`search-match-${c.id}`}>{searchMatchHint(c, q)}</span> : null}</span>
-            <span style={{ minWidth: 0 }}><span style={{ display: "block", ...ell }} title={p.main}>{p.main}</span><span className="mut" style={{ display: "block", ...ell }} title={p.sub}>{p.sub}</span></span>
+            <span style={{ minWidth: 0 }} onClick={(e) => e.stopPropagation()}><span style={{ display: "block", ...ell }} title={`claim #${c.id} · ${c.supplier}`}><span className="mut num" data-testid={`claim-number-${c.id}`}>#{c.id}</span> {c.supplier}</span><span style={{ display: "flex", alignItems: "center", minWidth: 0 }}><Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ display: "block", minWidth: 0, ...ell }} title={c.order_id}>{c.order_id}</Link><CopyValueButton value={c.order_id} label="Copy order #" testId={`btn-copy-order-${c.id}`} className="cp" /></span>{searchMatchHint(c, q) ? <span className="mut" style={{ display: "block", fontSize: 11, ...ell }} data-testid={`search-match-${c.id}`}>{searchMatchHint(c, q)}</span> : null}</span>
+            <span className="mut" data-testid={`claim-po-date-${c.id}`}>{fmtDate(c.order_date)}</span>
+            <span style={{ minWidth: 0 }}><span style={{ display: "block", ...ell }} title={p.main}>{p.main}</span><span className="mut" style={{ display: "flex", alignItems: "center", minWidth: 0 }}><span style={{ display: "block", minWidth: 0, ...ell }} title={p.sub}>{p.sub}</span>{c.asin && p.sub === c.asin ? <CopyValueButton value={c.asin} label="Copy ASIN" testId={`btn-copy-asin-${c.id}`} className="cp" /> : null}</span></span>
             <span>{isRefundSuggestion(c) ? "refund" : CLAIM_KIND_LABELS[c.kind]}{c.status === "suggested" ? <span className="amb"> · {c.found_by === "email" ? "from email" : "suggested"}</span> : null}{c.status === "closed" && c.bucket === "needs_attention" ? <span className="mut"> · closed</span> : null}{c.outcome && c.status !== "suggested" && c.status !== "closed" ? <><br /><span className="mut">{CLAIM_OUTCOME_LABELS[c.outcome]}</span></> : null}</span>
             <span className={`num${c.qty == null ? " amb" : ""}`} data-testid={`claim-qty-${c.id}`}>
               {c.qty == null ? "?" : fmtQty(c.qty)}{c.qty != null && c.ordered != null ? <span className="mut"> of {fmtQty(c.ordered)}</span> : null}
               {c.qty == null && <span className="mut"> {isRefundSuggestion(c) ? emailItemsText(c) : qtyText(c) === QTY_UNKNOWN_LABEL ? "not known yet" : qtyText(c)}</span>}
             </span>
             <span className={`num${c.amount_owed == null || c.status === "closed" ? " mut" : ""}`}>{c.status === "closed" ? `${money(c.remaining ?? 0)} left` : money(c.amount_owed)}{c.status === "open" && c.remaining != null && c.remaining > 0.005 && c.received > 0 ? <span className="amb"> · {money(c.remaining)} left</span> : null}</span>
-            <span title={c.sentence}><Sentence text={c.sentence} />{c.action.email ? <> · <a href={emailUrl(c.action.email)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} data-testid={`link-open-email-${c.id}`}>open email</a></> : null}
+            <span title={c.sentence} style={{ minWidth: 0 }}><Sentence text={c.sentence} />{c.action.email ? <> · <a href={emailUrl(c.action.email)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} data-testid={`link-open-email-${c.id}`}>open email</a></> : null}
               {c.action.links?.label_doc_id ? <> · <a href={labelUrl(c.action.links.label_doc_id)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} data-testid={`link-label-${c.id}`}>label</a></> : null}
               {c.action.links?.copy_message ? <> · <CopyMessageLink text={c.action.links.copy_message} testId={`link-copy-message-${c.id}`} /></> : null}</span>
             <span className={`num ${c.timed_out ? "amb" : "mut"}`} title={c.bucket_since ? `since ${fmtDate(c.bucket_since)}${c.due_at ? ` · timer runs out ${fmtDate(c.due_at)}` : ""}` : ""}>{c.days_in_bucket != null ? `${c.days_in_bucket} d` : "—"}</span>
@@ -794,9 +822,9 @@ function ClaimDetailPage({ id }: { id: number }) {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 16, flexWrap: "wrap", padding: "12px 24px 0" }}>
         <div style={{ flex: 1, minWidth: 360 }}>
-          <h1 data-testid="text-claim-title">{CLAIM_KIND_LABELS[c.kind]} · {c.supplier} <Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ fontWeight: 400, fontSize: 16, color: "#a39f96" }}>{c.order_id}</Link> <span className="mut num" style={{ fontWeight: 400, fontSize: 16 }} data-testid="claim-number">#{c.id}</span></h1>
+          <h1 data-testid="text-claim-title">{CLAIM_KIND_LABELS[c.kind]} · {c.supplier} <Link href={`/purchase-orders/${c.po_id}`} className="num" style={{ fontWeight: 400, fontSize: 16, color: "#a39f96" }}>{c.order_id}</Link><CopyValueButton value={c.order_id} label="Copy order #" testId="btn-copy-order" className="cp" /> <span className="mut num" style={{ fontWeight: 400, fontSize: 16 }} data-testid="claim-number">#{c.id}</span></h1>
           <div className="mut" style={{ marginTop: 6 }} data-testid="claim-subtitle">
-            PO {fmtDate(c.order_date)} · {productText(c).main}{c.asin ? <> · <span className="num">{c.asin}</span></> : null} · {c.qty == null ? "quantity not known yet" : `${fmtQty(c.qty)} ${c.qty_basis === "product_legacy" ? "Product" : "Individual"} units`}
+            PO {fmtDate(c.order_date)} · {productText(c).main}{c.asin ? <> · <span className="num">{c.asin}</span><CopyValueButton value={c.asin} label="Copy ASIN" testId="btn-copy-asin" className="cp" /></> : null} · {c.qty == null ? "quantity not known yet" : `${fmtQty(c.qty)} ${c.qty_basis === "product_legacy" ? "Product" : "Individual"} units`}
             <span style={{ margin: "0 6px" }}>·</span><span className={open && !c.reported_at && !emailed ? "amb" : ""} data-testid="claim-state">{c.sentence}</span>{c.days_open != null ? <> — open {c.days_open} days</> : null}
           </div>
         </div>

@@ -126,6 +126,9 @@ export function addBusinessDays(from: Date | string, n: number, tz = BUSINESS_TZ
   return new Date(a.getTime() + days * 86_400_000);
 }
 /** Days in bucket (calendar), whole, never negative. */
+/** The Claims list's default order (Maria 2026-11-18, replacing longest waiting first): the PO's order date, newest first; ties by claim # descending. The server returns the rows in it; the client sorts the same way and inside each Needs attention group. */
+export const newestPoFirst = (a: { order_date: string; id: number }, b: { order_date: string; id: number }): number => b.order_date.localeCompare(a.order_date) || b.id - a.id;
+
 export function daysSince(since: string | null, now: Date): number | null {
   const t = ts(since);
   return t == null ? null : Math.max(0, Math.floor((now.getTime() - t) / 86_400_000));

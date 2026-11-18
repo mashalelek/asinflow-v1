@@ -976,7 +976,14 @@ refunds) stays as built; commit 2b rebuilds the two pages against them.
   primary button for the task** (Open claim · Contacted supplier ·
   Followed up · Confirm outcome · Sent label · Asked · Refund received ·
   Check on it …) plus Dismiss / Snooze links where they apply. Default
-  sort: longest waiting.
+  sort: newest PO first (the PO's order date, ties by claim # descending;
+  Maria 2026-11-18, replacing longest waiting) — on every tab, and inside
+  each Needs attention group, whose order stays. A **PO date** column
+  (MM/DD/YYYY as on the POs list, muted, 80 px taken from Step) sits
+  between Supplier · PO and Product; its header and Waiting's sort asc /
+  desc on a click like the POs list's headers, so longest waiting is one
+  click away. A copy icon beside the PO order # and the ASIN (the list and
+  the detail header) copies the value without opening the row.
 - **Claim detail** — header: kind · supplier · order #, then PO date ·
   product · ASIN · qty · the state sentence · days open; action buttons
   **Contacted supplier · Supplier replied · Set outcome ▾ · More ▾**.

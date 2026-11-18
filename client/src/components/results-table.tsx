@@ -4,7 +4,8 @@ import { createPortal } from "react-dom";
 import { Link } from "wouter";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipPortal } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, Copy, Check, Lock, Unlock, ShoppingBag, Pencil, ShoppingCart, SearchX, Clock } from "lucide-react";
+import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown, Lock, Unlock, ShoppingBag, Pencil, ShoppingCart, SearchX, Clock } from "lucide-react";
+import { CopyValueButton } from "@/components/copy-value-button";
 
 import {
   type AsinResult,
@@ -253,34 +254,9 @@ function KeepaLink({ asin, testId, onReviewed, reviewedSaveUrl }: { asin: string
   );
 }
 
+/** The Product cell's copy icon — the shared CopyValueButton (client/src/components/copy-value-button.tsx) with the ASIN. */
 function CopyAsinButton({ asin }: { asin: string }) {
-  const [copied, setCopied] = useState(false);
-  function handleCopy(e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    navigator.clipboard.writeText(asin).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          onClick={handleCopy}
-          className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
-          data-testid={`btn-copy-asin-${asin}`}
-        >
-          {copied
-            ? <Check className="h-3 w-3 text-emerald-500" />
-            : <Copy className="h-3 w-3" />}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top">
-        <p className="text-xs">{copied ? "Copied!" : "Copy ASIN"}</p>
-      </TooltipContent>
-    </Tooltip>
-  );
+  return <CopyValueButton value={asin} label="Copy ASIN" testId={`btn-copy-asin-${asin}`} />;
 }
 
 interface ResultsTableProps {
