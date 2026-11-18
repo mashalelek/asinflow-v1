@@ -105,12 +105,12 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
     try {
       const enabled = process.env.ENABLE_CRONS === "true";
       const last = (await query(
-        `SELECT id, status, started_at, finished_at, summary, error FROM jobs WHERE trigger = 'scheduled' ORDER BY queued_at DESC LIMIT 1`,
+        `SELECT id, status, started_at, finished_at, summary, error FROM jobs WHERE kind = 'refresh' AND trigger = 'scheduled' ORDER BY queued_at DESC LIMIT 1`,
       )).rows[0] ?? null;
       const nextPassAt = (deps as any).nextPassAt ? await (deps as any).nextPassAt() : null;
       // The red "N steps failed in the last pass" (2026-11-05): the newest FINISHED scheduled pass, until one runs clean.
       const finished = (await query(
-        `SELECT id, status, finished_at, summary FROM jobs WHERE trigger = 'scheduled' AND status IN ('done', 'failed') ORDER BY finished_at DESC NULLS LAST LIMIT 1`,
+        `SELECT id, status, finished_at, summary FROM jobs WHERE kind = 'refresh' AND trigger = 'scheduled' AND status IN ('done', 'failed') ORDER BY finished_at DESC NULLS LAST LIMIT 1`,
       )).rows[0] ?? null;
       res.json({ enabled, scheduleDefined: !!(deps as any).nextPassAt, nextPassAt, lastScheduled: last, lastPass: lastPassOf(finished) });
     } catch (err: any) {
@@ -120,13 +120,14 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
 
   router.get("/api/jobs/current", async (_req: Request, res: Response) => {
     try {
-      // Two lanes (2026-10-16): the scheduled pass and the lane M job
-      // (manual / onboarding / bulk) can both be running. `queued` carries
-      // both lanes' waiting jobs; the client counts lane M positions itself.
+      // Three lanes (2026-10-16 / 2026-11-18): the scheduled pass, the lane M job
+      // (manual / onboarding / bulk) and the Keepa job (lane K) can all be running.
+      // `queued` carries every lane's waiting jobs; the client counts lane M positions itself.
       const active = await listActive(query);
       res.json({
-        scheduled: active.find((j) => j.status === "running" && j.trigger === "scheduled") ?? null,
-        manual: active.find((j) => j.status === "running" && j.trigger !== "scheduled") ?? null,
+        scheduled: active.find((j) => j.status === "running" && j.kind === "refresh" && j.trigger === "scheduled") ?? null,
+        manual: active.find((j) => j.status === "running" && j.kind === "refresh" && j.trigger !== "scheduled") ?? null,
+        keepa: active.find((j) => j.status === "running" && j.kind === "keepa") ?? null,
         queued: active.filter((j) => j.status === "queued"),
       });
     } catch (err: any) {

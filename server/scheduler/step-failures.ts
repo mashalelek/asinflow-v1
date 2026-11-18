@@ -85,7 +85,7 @@ export async function persistentAsins(query: QueryLike, stage: string, job: Pick
     const rows = (await query(
       `SELECT (SELECT jsonb_object_agg(k, rr.outcomes -> k) FROM unnest($3::text[]) k WHERE rr.outcomes ? k) AS o
          FROM refresh_runs rr JOIN jobs j ON j.id = rr.job_id
-        WHERE rr.stage = $1 AND j.trigger = 'scheduled' AND rr.job_id <> $2
+        WHERE rr.stage = $1 AND j.kind = 'refresh' AND j.trigger = 'scheduled' AND rr.job_id <> $2
         ORDER BY rr.started_at DESC LIMIT ${PERSISTENT_PASSES - 1}`, [stage, job.id, keys])).rows as Array<{ o: Record<string, string> | null }>;
     if (rows.length < PERSISTENT_PASSES - 1) return new Set();
     return new Set(keys.filter((a) => rows.every((r) => r.o?.[a] === failing.get(a))));

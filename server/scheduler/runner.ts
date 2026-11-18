@@ -19,7 +19,7 @@ import {
   claimNextJob, writeProgress, readStatus, finishJob, recordComponentRun,
 } from "./jobs-repo";
 import {
-  CancelledError, ComponentError, ONBOARDING_COMPONENTS, SCHEDULED_ONLY_COMPONENTS, explicitlyAuthorized, laneOf, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
+  CancelledError, ComponentError, ONBOARDING_COMPONENTS, SCHEDULED_ONLY_COMPONENTS, KEEPA_COMPONENTS, explicitlyAuthorized, laneOf, type ComponentContext, type ComponentDef, type ComponentResult, type JobRow, type JobSummary,
   type JobProgress, type Flip, type QueryLike, type Lane,
 } from "./types";
 import { assessStep, stepNotes } from "./step-failures";
@@ -91,15 +91,19 @@ export function componentsForJob(job: JobRow, all: readonly ComponentDef[] = COM
 }
 
 function planFor(job: JobRow, all: readonly ComponentDef[]): ComponentDef[] {
+  // A Keepa job (lane K, 2026-11-18) runs component 33 and nothing else; no refresh job — scheduled pass, Refresh
+  // button, onboarding, bulk, an explicit components list — ever runs it.
+  if (job.kind === "keepa") return all.filter((c) => KEEPA_COMPONENTS.includes(c.n));
+  const notKeepa = all.filter((c) => !KEEPA_COMPONENTS.includes(c.n));
   if (job.components && job.components.length > 0) {
     const want = new Set(job.components);
-    return all.filter((c) => want.has(c.n));
+    return notKeepa.filter((c) => want.has(c.n));
   }
   if (job.trigger === "onboarding") {
     const want = new Set(ONBOARDING_COMPONENTS);
-    return all.filter((c) => want.has(c.n));
+    return notKeepa.filter((c) => want.has(c.n));
   }
-  return all.filter((c) => c.tier === "hourly" || job.include_daily);
+  return notKeepa.filter((c) => c.tier === "hourly" || job.include_daily);
 }
 
 /** ASINs still to do when resuming a per-ASIN / batch component at a cursor. */
@@ -126,7 +130,7 @@ export async function runJob(
   const ledgerScope = bulk ? `bulk:${bulk.listId}` : (job.scope_asins ? "subset" : "full");
   const progress: JobProgress = { done: [...(job.progress?.done ?? [])], component: job.progress?.component, asin_cursor: job.progress?.asin_cursor ?? null };
   const resumed = progress.done.length > 0 || progress.component != null;
-  log(`job ${job.id} ${resumed ? "resumed" : "started"} [lane ${laneOf(job.trigger)}]: trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${job.components ? ` components=[${job.components.join(",")}]` : ""}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
+  log(`job ${job.id} ${resumed ? "resumed" : "started"} [lane ${laneOf(job)}]: kind=${job.kind} trigger=${job.trigger} scope=${job.scope_asins ? "subset" : "scheduled"} asins=${scope.length} daily=${job.include_daily}${job.components ? ` components=[${job.components.join(",")}]` : ""}${resumed ? ` done=[${progress.done.join(",")}] at=${progress.component ?? "-"}/${progress.asin_cursor ?? "-"}` : ""}`);
 
   const summary: JobSummary = { asins: bulk ? bulk.listAsins.length : scope.length, durationMs: 0, components: {}, flips: [] };
   const cache = deps.cache ?? new Map<string, unknown>();
@@ -279,7 +283,7 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
       try {
         lockClient = await deps.pool.connect();
         const r = await lockClient.query(`SELECT pg_try_advisory_lock($1) AS ok`, [RUNNER_LOCK_KEY]);
-        if (r.rows[0]?.ok === true) { log(`runner lock ${RUNNER_LOCK_KEY} acquired — lanes S (scheduled) and M (manual/onboarding/bulk)`); return; }
+        if (r.rows[0]?.ok === true) { log(`runner lock ${RUNNER_LOCK_KEY} acquired — lanes S (scheduled), M (manual/onboarding/bulk) and K (Keepa)`); return; }
         lockClient.release();
         lockClient = null;
         log(`runner lock held by another instance; retrying in ${pollMs} ms`);
@@ -291,10 +295,11 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
     }
   };
 
-  // One loop per lane, both under the one advisory lock. Each lane claims
-  // and resumes only its own trigger set, so a lane M job (manual,
+  // One loop per lane, all under the one advisory lock. Each lane claims
+  // and resumes only its own kind + trigger set, so a lane M job (manual,
   // onboarding, bulk) starts the moment it is enqueued while the scheduled
-  // pass keeps running in lane S. Within a lane: one job at a time.
+  // pass keeps running in lane S, and a Keepa job (lane K, 2026-11-18) runs
+  // beside both. Within a lane: one job at a time.
   const laneLoop = async (lane: Lane) => {
     while (!stopped) {
       let job: JobRow | null = null;
@@ -320,7 +325,7 @@ export function startRunner(deps: RunnerDeps): RunnerHandle {
 
   const loop = async () => {
     await acquireLock();
-    if (!stopped) await Promise.all([laneLoop("S"), laneLoop("M")]);
+    if (!stopped) await Promise.all([laneLoop("S"), laneLoop("M"), laneLoop("K")]);
     if (lockClient) {
       await lockClient.query(`SELECT pg_advisory_unlock($1)`, [RUNNER_LOCK_KEY]).catch(() => {});
       lockClient.release();

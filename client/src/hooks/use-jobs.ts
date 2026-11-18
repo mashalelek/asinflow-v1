@@ -17,6 +17,8 @@ export interface JobsState {
   scheduled: Job | null;
   /** The running manual / onboarding / bulk job (lane M), if any. */
   manual: Job | null;
+  /** The running Keepa job (lane K, 2026-11-18), if any. */
+  keepa: Job | null;
   queued: Job[];
   /** The newest job this tab enqueued that is still active, with its lane M queue position. */
   mine: { job: Job; ahead: number } | null;
@@ -29,7 +31,7 @@ export interface JobsState {
  * touched (fix 2026-10-18: an onboarding job's results never reloaded).
  */
 export function useJobs(onFinished: (job: Job) => void, onSettled?: (job: Job) => void) {
-  const [state, setState] = useState<JobsState>({ scheduled: null, manual: null, queued: [], mine: null });
+  const [state, setState] = useState<JobsState>({ scheduled: null, manual: null, keepa: null, queued: [], mine: null });
   const mineIds = useRef<Set<number>>(new Set());
   const activeIds = useRef<Set<number>>(new Set());
   const onFinishedRef = useRef(onFinished);
@@ -43,6 +45,7 @@ export function useJobs(onFinished: (job: Job) => void, onSettled?: (job: Job) =
     const nowActive = new Set<number>();
     if (cur.scheduled) nowActive.add(cur.scheduled.id);
     if (cur.manual) nowActive.add(cur.manual.id);
+    if (cur.keepa) nowActive.add(cur.keepa.id);
     for (const q of cur.queued) nowActive.add(q.id);
 
     // Anything that was active last time and is not now has finished.
@@ -64,13 +67,13 @@ export function useJobs(onFinished: (job: Job) => void, onSettled?: (job: Job) =
     const mineActive = laneM.filter((j) => mineIds.current.has(j.id));
     const mineJob = mineActive[mineActive.length - 1] ?? null;
     const ahead = mineJob ? laneM.findIndex((j) => j.id === mineJob.id) : 0;
-    setState({ scheduled: cur.scheduled, manual: cur.manual, queued: cur.queued, mine: mineJob ? { job: mineJob, ahead } : null });
+    setState({ scheduled: cur.scheduled, manual: cur.manual, keepa: cur.keepa ?? null, queued: cur.queued, mine: mineJob ? { job: mineJob, ahead } : null });
   }, []);
 
   // Poll immediately on mount (a scheduled pass may already be running),
   // then every 10 s only while something is active.
   useEffect(() => { void poll(); }, [poll]);
-  const anyActive = state.scheduled != null || state.manual != null || state.queued.length > 0;
+  const anyActive = state.scheduled != null || state.manual != null || state.keepa != null || state.queued.length > 0;
   useEffect(() => {
     if (!anyActive) return;
     const t = setInterval(() => { void poll(); }, JOBS_POLL_MS);

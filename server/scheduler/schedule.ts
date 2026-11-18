@@ -35,8 +35,9 @@
 //
 // Express-free; the clock, the timer and the enqueue are injectable so the
 // tests drive the chain across both DST nights without waiting.
-import { enqueueJob, listActive, setIncludeDaily, type EnqueueInput } from "./jobs-repo";
+import { enqueueJob, listActive, setIncludeDaily, enqueueDailyKeepaJob, type EnqueueInput } from "./jobs-repo";
 import type { JobRow, QueryLike } from "./types";
+import { keepaMode } from "../keepa";
 
 export const SCHEDULE_TZ = "America/New_York";
 export const MIDNIGHT_EXPR = "0 0 * * *";   // the pass that includes the daily block
@@ -92,6 +93,23 @@ export interface ScheduleDeps {
   now?: () => Date;
   /** Injected timer (tests capture the armed instants). */
   timer?: ScheduleTimer;
+  /** The daily Keepa job (lane K, 2026-11-18): whether to enqueue it at 00:00 (default: KEEPA_API_KEY is set) and how. */
+  keepaEnabled?: () => boolean;
+  enqueueKeepa?: () => Promise<{ job: JobRow; existing: boolean }>;
+}
+
+/**
+ * The 00:00 ET Keepa tick (docs/claude_spec-patch-keepa-trends.md "Jobs"): one scheduled Keepa job for every
+ * active + parked ASIN, on lane K. None is added while the previous one is still queued or running. Off without
+ * a key. Separate from the refresh tick so a Keepa failure never touches the pass.
+ */
+export async function runKeepaDailyTick(deps: ScheduleDeps = {}): Promise<JobRow | null> {
+  const enabled = deps.keepaEnabled ?? (() => keepaMode() !== "off");
+  if (!enabled()) { scheduleLog("daily Keepa job not enqueued — KEEPA_API_KEY not set"); return null; }
+  const enqueue = deps.enqueueKeepa ?? (() => enqueueDailyKeepaJob(deps.query));
+  const r = await enqueue();
+  scheduleLog(r.existing ? `daily Keepa job not enqueued — Keepa job #${r.job.id} is still ${r.job.status}` : `daily Keepa job enqueued as job ${r.job.id} (lane K)`);
+  return r.job;
 }
 
 /** A tick that fires this late is logged (the event loop was blocked, or the host slept). */
@@ -169,6 +187,10 @@ export function startSchedule(deps: ScheduleDeps = {}): ScheduleHandle {
       if (late > LATE_TICK_WARN_MS) scheduleLog(`tick for ${next.at.toISOString()} fired ${Math.round(late / 60_000)} min late`);
       try { await runScheduledTick(next.includeDaily, deps, fired); }
       catch (err: any) { scheduleLog(`scheduled tick failed to enqueue: ${err?.message ?? err}`); }
+      if (next.includeDaily) {
+        try { await runKeepaDailyTick(deps); }
+        catch (err: any) { scheduleLog(`daily Keepa tick failed to enqueue: ${err?.message ?? err}`); }
+      }
       arm(new Date(Math.max(next.at.getTime(), now().getTime())));
     }, delay);
   };

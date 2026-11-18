@@ -131,13 +131,13 @@ describe("scope rule and API shape", () => {
   });
   it("two lanes (2026-10-16): the hook tracks both running jobs, counts queue position in lane M only; no toolbar progress bar (2026-10-17)", () => {
     const src = read("hooks/use-jobs.ts");
-    expect(src).toMatch(/scheduled: cur\.scheduled, manual: cur\.manual, queued: cur\.queued/);
+    expect(src).toMatch(/scheduled: cur\.scheduled, manual: cur\.manual, keepa: cur\.keepa \?\? null, queued: cur\.queued/); // + lane K (2026-11-18)
     expect(src).not.toMatch(/running: cur\.manual/);
     expect(read("pages/home.tsx")).not.toMatch(/progress-refresh|\(scheduled pass\)|jobs\.running/);
     expect(src).toMatch(/const laneM = \[\.\.\.\(cur\.manual \? \[cur\.manual\] : \[\]\), \.\.\.cur\.queued\.filter\(isLaneM\)\]/);
     expect(src).toMatch(/ahead = mineJob \? laneM\.findIndex/);
     const api = read("lib/jobs-api.ts");
-    expect(api).toMatch(/interface CurrentJobs \{ scheduled: Job \| null; manual: Job \| null; queued: Job\[\] \}/);
+    expect(api).toMatch(/interface CurrentJobs \{ scheduled: Job \| null; manual: Job \| null; keepa\?: Job \| null; queued: Job\[\] \}/);
     const home = read("pages/home.tsx");
     expect(home).toMatch(/jobs\.manual && !jobs\.mine/);
   });

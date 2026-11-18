@@ -9,7 +9,8 @@
 // Output: a markdown report on stdout (committed as docs/keepa-spike-<date>.md) and, with --fixture <path>, the
 // test ASIN's product object trimmed to the series this patch reads (public Keepa data) for the unit tests.
 //
-//   tsx script/keepa-spike.ts [--fixture server/__fixtures__/keepa/B08G6J2PY5.json] [--prod]
+//   tsx script/keepa-spike.ts [--fixture server/__fixtures__/keepa/B08G6J2PY5.json] [--fixture-only] [--prod]
+//   --fixture-only: one call for the test ASIN (4 tokens), the fixture rewritten, no report.
 import "./env";
 import fs from "node:fs";
 import pg from "pg";
@@ -72,6 +73,15 @@ async function main() {
   const fixturePath = fixtureArg >= 0 ? process.argv[fixtureArg + 1] : null;
   const out: string[] = [];
   const p = (s = "") => out.push(s);
+
+  if (process.argv.includes("--fixture-only")) {
+    if (!fixturePath) { console.error("--fixture-only needs --fixture <path>"); process.exit(1); }
+    const r = await call({ asin: TEST_ASIN, buybox: "1", rating: "1" });
+    if (!r.reply.products?.[0]) { console.error(`no product (HTTP ${r.status})`); process.exit(1); }
+    writeFixture(fixturePath, r.reply.products[0], r.reply);
+    console.log(`fixture written: ${fixturePath} (${fs.statSync(fixturePath).size.toLocaleString()} bytes; tokensConsumed ${r.reply.tokensConsumed}, tokensLeft ${r.reply.tokensLeft})`);
+    return;
+  }
 
   // 19 more ASINs from the catalog (active, oldest first — a stable pick).
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -185,18 +195,23 @@ async function main() {
   p();
 
   if (fixturePath) {
-    const keep: any = {
-      asin: single.asin, domainId: single.domainId, lastUpdate: single.lastUpdate, lastPriceChange: single.lastPriceChange,
-      lastRatingUpdate: single.lastRatingUpdate, trackingSince: single.trackingSince, monthlySold: single.monthlySold,
-      monthlySoldHistory: single.monthlySoldHistory ?? null,
-      csv: csv.map((s, i) => ([1, 3, 10, 11, 17, 18].includes(i) ? s : null)),
-    };
-    for (const k of fbaKeys) keep[k] = single[k];
-    fs.mkdirSync(fixturePath.replace(/\/[^/]+$/, ""), { recursive: true });
-    fs.writeFileSync(fixturePath, JSON.stringify({ _note: `Keepa /product for ${TEST_ASIN}, domain 1, buybox=1&rating=1, fetched ${new Date().toISOString()}; trimmed to the series the trend columns read. Public catalog data.`, tokensLeft: b.reply.tokensLeft, refillIn: b.reply.refillIn, refillRate: b.reply.refillRate, products: [keep] }, null, 0));
+    writeFixture(fixturePath, single, b.reply);
     p(`Fixture written: ${fixturePath} (${fs.statSync(fixturePath).size.toLocaleString()} bytes).`);
   }
   console.log(out.join("\n"));
+}
+
+/** The test ASIN's product trimmed to what the trend columns read: csv 1 / 3 / 11 / 17 / 18 / 34 / 35 (+10), monthlySoldHistory, the stamps. */
+function writeFixture(path: string, single: any, reply: KeepaReply): void {
+  const csv: Array<number[] | null> = single.csv ?? [];
+  const keep: any = {
+    asin: single.asin, domainId: single.domainId, lastUpdate: single.lastUpdate, lastPriceChange: single.lastPriceChange,
+    lastRatingUpdate: single.lastRatingUpdate, trackingSince: single.trackingSince, monthlySold: single.monthlySold ?? null,
+    monthlySoldHistory: single.monthlySoldHistory ?? null,
+    csv: csv.map((s, i) => ([1, 3, 10, 11, 17, 18, 34, 35].includes(i) ? s : null)),
+  };
+  fs.mkdirSync(path.replace(/\/[^/]+$/, ""), { recursive: true });
+  fs.writeFileSync(path, JSON.stringify({ _note: `Keepa /product for ${TEST_ASIN}, domain 1, buybox=1&rating=1, fetched ${new Date().toISOString()}; trimmed to the series the trend columns read (csv 1, 3, 10, 11, 17, 18, 34 COUNT_NEW_FBA, 35 COUNT_NEW_FBM; monthlySoldHistory). Public catalog data.`, tokensLeft: reply.tokensLeft, refillIn: reply.refillIn, refillRate: reply.refillRate, products: [keep] }, null, 0));
 }
 
 main().catch((err) => { console.error(err?.message ?? err); process.exit(1); });

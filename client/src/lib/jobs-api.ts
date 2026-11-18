@@ -39,7 +39,8 @@ export function failedStepsText(s: JobSummary | null | undefined): string | null
 
 export interface Job {
   id: number;
-  kind: "refresh";
+  /** 'refresh' (lanes S / M) or 'keepa' (lane K, 2026-11-18: the daily Keepa job, trigger scheduled, and new-ASIN jobs, trigger onboarding). */
+  kind: "refresh" | "keepa";
   trigger: JobTrigger;
   target: "main" | "bulk";
   bulk_list_id: string | null;
@@ -78,7 +79,14 @@ export const COMPONENT_LABELS: Record<number, string> = {
   14: "profit", 15: "inventory", 16: "listings", 17: "primary SKU", 18: "suppressions",
   19: "sales", 20: "refunds", 21: "actual fees",
   22: "close OOS listings", 23: "inventory ledger", 24: "delete dead listings",
+  33: "Keepa history",
 };
+
+/** The daily Keepa job's in-scope ASINs not fetched that day (`keepa_incomplete`, patch "Running a job"); 0 when none / not a Keepa job. */
+export function keepaIncompleteCount(job: Pick<Job, "kind" | "summary">): number {
+  if (job.kind !== "keepa") return 0;
+  return Number(job.summary?.components?.["33_keepa"]?.keepa_incomplete ?? 0) || 0;
+}
 
 export function componentLabel(n: number | undefined): string {
   return n == null ? "" : (COMPONENT_LABELS[n] ?? `component ${n}`);
@@ -119,6 +127,7 @@ export function subsetComponentName(job: Job): string {
  * with no suffix — "manual · sales backfill", "manual · gating".
  */
 export function jobKindLabel(job: Job): string {
+  if (job.kind === "keepa") return `${job.trigger} · Keepa`;
   if (job.components && job.components.length > 0) return `${job.trigger} · ${subsetComponentName(job)}`;
   return `${job.trigger} (${job.include_daily ? "daily" : "hourly"})`;
 }
@@ -156,7 +165,7 @@ export function completionText(job: Job): { title: string; description: string }
   const n = s?.asins ?? job.scope_asins?.length ?? 0;
   const ms = jobDurationMs(job);
   const dur = ms != null ? formatDuration(ms) : "";
-  const who = job.trigger === "scheduled" ? "Scheduled refresh" : "Refresh";
+  const who = job.kind === "keepa" ? (job.trigger === "scheduled" ? "Daily Keepa fetch" : "Keepa fetch") : job.trigger === "scheduled" ? "Scheduled refresh" : "Refresh";
   if (job.status === "failed") return { title: `${who} failed`, description: job.error ?? "unknown error" };
   if (job.status === "cancelled") return { title: `${who} cancelled`, description: `${n.toLocaleString()} ASINs · stopped at ${componentLabel(s?.stoppedAt)}` };
   const flips = changeCount(s);
@@ -233,9 +242,9 @@ export async function enqueueRefresh(asins: string[] | null, fetchFn: typeof fet
   }));
 }
 
-/** One running job per lane (2026-10-16): the scheduled pass and the lane M job (manual / onboarding / bulk). */
-export interface CurrentJobs { scheduled: Job | null; manual: Job | null; queued: Job[] }
-export const isLaneM = (j: Job) => j.trigger !== "scheduled";
+/** One running job per lane (2026-10-16 / 2026-11-18): the scheduled pass, the lane M job (manual / onboarding / bulk) and the Keepa job (lane K). */
+export interface CurrentJobs { scheduled: Job | null; manual: Job | null; keepa?: Job | null; queued: Job[] }
+export const isLaneM = (j: Job) => j.kind !== "keepa" && j.trigger !== "scheduled";
 
 export async function getCurrent(fetchFn: typeof fetch = fetch): Promise<CurrentJobs> {
   return parse(await fetchFn("/api/jobs/current", { credentials: "same-origin" }));

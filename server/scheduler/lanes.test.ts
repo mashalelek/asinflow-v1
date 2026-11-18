@@ -26,10 +26,11 @@ const row = (over: Partial<JobRow>): JobRow => ({
 
 describe("lanes", () => {
   it("laneOf / LANE_TRIGGERS", () => {
-    expect(laneOf("scheduled")).toBe("S");
-    for (const t of ["manual", "onboarding", "bulk"] as const) expect(laneOf(t)).toBe("M");
+    expect(laneOf({ kind: "refresh", trigger: "scheduled" })).toBe("S");
+    for (const t of ["manual", "onboarding", "bulk"] as const) expect(laneOf({ kind: "refresh", trigger: t })).toBe("M");
     expect(LANE_TRIGGERS.S).toEqual(["scheduled"]);
     expect(LANE_TRIGGERS.M).toEqual(["manual", "onboarding", "bulk"]);
+    expect(laneOf({ kind: "keepa", trigger: "onboarding" })).toBe("K"); // lane K (2026-11-18): kind decides, not the trigger
   });
 
   it("claimNextJob filters by the lane's triggers (resume first, then queue order)", async () => {
@@ -37,12 +38,12 @@ describe("lanes", () => {
     const q: QueryLike = async (text, params) => { sql.push({ text, params }); return { rows: [], rowCount: 0 }; };
     await claimNextJob(q, "M");
     const claim = sql.find((s) => s.text.includes("FROM jobs"))!;
-    expect(claim.text).toMatch(/status IN \('running','queued'\) AND trigger = ANY\(\$1::text\[\]\)/);
-    expect(claim.text).toMatch(/ORDER BY \(status = 'running'\) DESC, queued_at ASC, id ASC/);
-    expect(claim.params).toEqual([["manual", "onboarding", "bulk"]]);
+    expect(claim.text).toMatch(/status IN \('running','queued'\) AND trigger = ANY\(\$1::text\[\]\) AND kind = \$2/);
+    expect(claim.text).toMatch(/ORDER BY \(status = 'running'\) DESC, \(kind = 'keepa' AND trigger = 'onboarding'\) DESC, queued_at ASC, id ASC/);
+    expect(claim.params).toEqual([["manual", "onboarding", "bulk"], "refresh"]);
     sql.length = 0;
     await claimNextJob(q, "S");
-    expect(sql.find((s) => s.text.includes("FROM jobs"))!.params).toEqual([["scheduled"]]);
+    expect(sql.find((s) => s.text.includes("FROM jobs"))!.params).toEqual([["scheduled"], "refresh"]);
   });
 
   it("laneAhead counts lane M jobs only — the scheduled pass never counts", () => {
@@ -123,7 +124,7 @@ describe("the schedule tick looks at lane S only", () => {
 // ── the runner with a fake pool: both lanes live in one process ────────────
 function fakePool(seed: JobRow[], scope: string[]) {
   const jobs = seed.map((j) => ({ ...j }));
-  const claims: Array<{ id: number; lane: string[] }> = [];
+  const claims: Array<{ id: number; lane: string[]; kind: string }> = [];
   const q = async (text: string, params: any[] = []) => {
     const s = text.replace(/\s+/g, " ").trim();
     if (/pg_try_advisory_lock/.test(s)) return { rows: [{ ok: true }], rowCount: 1 };
@@ -131,9 +132,10 @@ function fakePool(seed: JobRow[], scope: string[]) {
     if (s === "BEGIN" || s === "COMMIT" || s === "ROLLBACK") return { rows: [], rowCount: 0 };
     if (s.includes("FROM jobs WHERE status IN ('running','queued') AND trigger = ANY")) {
       const want: string[] = params[0];
-      const c = jobs.filter((j) => (j.status === "running" || j.status === "queued") && want.includes(j.trigger))
-        .sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1) || +new Date(a.queued_at) - +new Date(b.queued_at) || a.id - b.id);
-      if (c[0]) claims.push({ id: c[0].id, lane: want });
+      const kind: string = params[1];
+      const c = jobs.filter((j) => (j.status === "running" || j.status === "queued") && want.includes(j.trigger) && j.kind === kind)
+        .sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1) || ((b.kind === "keepa" && b.trigger === "onboarding") ? 1 : 0) - ((a.kind === "keepa" && a.trigger === "onboarding") ? 1 : 0) || +new Date(a.queued_at) - +new Date(b.queued_at) || a.id - b.id);
+      if (c[0]) claims.push({ id: c[0].id, lane: want, kind });
       return { rows: c.slice(0, 1), rowCount: c.length ? 1 : 0 };
     }
     if (s.startsWith("UPDATE jobs SET status = 'running'")) { const j = jobs.find((x) => x.id === params[0])!; j.status = "running"; j.started_at = j.started_at ?? new Date(); return { rows: [j], rowCount: 1 }; }
@@ -217,6 +219,49 @@ describe("two lanes in one runner", () => {
     await h.stop();
   });
 
+  it("lane K: a Keepa job runs while S and M each have a running job; a waiting Keepa job never delays a lane-S claim (2026-11-18)", async () => {
+    const gS = gate(), gM = gate(), gK = gate();
+    const order: string[] = [];
+    const comps = [
+      stub(10, async (ctx) => { order.push(`start:${ctx.job.id}`); if (ctx.job.id === 1) await gS.p; if (ctx.job.id === 2) await gM.p; order.push(`end:${ctx.job.id}`); return { counts: {}, outcomes: {} }; }),
+      stub(33, async (ctx) => { order.push(`start:${ctx.job.id}`); if (ctx.job.id === 3) await gK.p; order.push(`end:${ctx.job.id}`); return { counts: {}, outcomes: {} }; }),
+    ];
+    const seed = [
+      row({ id: 1, trigger: "scheduled", scope_asins: null, queued_at: new Date("2026-11-18T05:00:00Z") }),
+      row({ id: 2, trigger: "manual", scope_asins: ["A1"], queued_at: new Date("2026-11-18T05:00:01Z") }),
+      row({ id: 3, kind: "keepa", trigger: "scheduled", scope_asins: null, queued_at: new Date("2026-11-18T05:00:02Z") }),
+    ];
+    const f = fakePool(seed, ["A1"]);
+    const h = startRunner({ pool: f.pool, sellerId: "S", components: comps, pollMs: 10 });
+    await waitFor(() => ["start:1", "start:2", "start:3"].every((x) => order.includes(x))); // all three lanes busy at once
+    // a queued Keepa job (new-ASIN) waits behind #3 in lane K; a new scheduled pass is claimed by lane S the moment #1 ends
+    f.jobs.push(row({ id: 4, kind: "keepa", trigger: "onboarding", scope_asins: ["A1"], queued_at: new Date("2026-11-18T06:00:00Z") }));
+    f.jobs.push(row({ id: 5, trigger: "scheduled", scope_asins: null, queued_at: new Date("2026-11-18T06:00:01Z") }));
+    gS.open();
+    await waitFor(() => f.jobs.find((j) => j.id === 5)!.status === "done");
+    expect(f.jobs.find((j) => j.id === 4)!.status).toBe("queued"); // lane K still on #3
+    expect(f.jobs.find((j) => j.id === 3)!.status).toBe("running");
+    gK.open(); gM.open();
+    await waitFor(() => [2, 3, 4].every((id) => f.jobs.find((j) => j.id === id)!.status === "done"));
+    expect(f.claims.filter((c) => c.id === 3 || c.id === 4).every((c) => c.kind === "keepa")).toBe(true);
+    expect(f.claims.filter((c) => c.id === 1 || c.id === 5).every((c) => c.kind === "refresh" && c.lane.join() === "scheduled")).toBe(true);
+    await h.stop();
+  });
+
+  it("lane K: a queued new-ASIN Keepa job is claimed ahead of a queued daily Keepa job", async () => {
+    const order: number[] = [];
+    const comps = [stub(33, async (ctx) => { order.push(ctx.job.id); return { counts: {}, outcomes: {} }; })];
+    const seed = [
+      row({ id: 11, kind: "keepa", trigger: "scheduled", scope_asins: null, queued_at: new Date("2026-11-18T05:00:00Z") }),
+      row({ id: 12, kind: "keepa", trigger: "onboarding", scope_asins: ["A1"], queued_at: new Date("2026-11-18T05:00:05Z") }),
+    ];
+    const f = fakePool(seed, ["A1"]);
+    const h = startRunner({ pool: f.pool, sellerId: "S", components: comps, pollMs: 10 });
+    await waitFor(() => [11, 12].every((id) => f.jobs.find((j) => j.id === id)!.status === "done"));
+    expect(order).toEqual([12, 11]);
+    await h.stop();
+  });
+
   it("no duplicate onboarding when both lanes discover the same ASIN: the second enqueue is dropped", async () => {
     // Lane S's component found N1 and enqueued; lane M's run finds N1 too.
     const activeCover = new Set<string>();
@@ -240,8 +285,9 @@ describe("surfaces", () => {
   it("GET /api/jobs/current returns one running job per lane plus the queue", () => {
     const s = readFileSync(join(__dirname, "routes.ts"), "utf8");
     const r = s.slice(s.indexOf('router.get("/api/jobs/current"'), s.indexOf('router.get("/api/jobs", '));
-    expect(r).toMatch(/scheduled: active\.find\(\(j\) => j\.status === "running" && j\.trigger === "scheduled"\)/);
-    expect(r).toMatch(/manual: active\.find\(\(j\) => j\.status === "running" && j\.trigger !== "scheduled"\)/);
+    expect(r).toMatch(/scheduled: active\.find\(\(j\) => j\.status === "running" && j\.kind === "refresh" && j\.trigger === "scheduled"\)/);
+    expect(r).toMatch(/manual: active\.find\(\(j\) => j\.status === "running" && j\.kind === "refresh" && j\.trigger !== "scheduled"\)/);
+    expect(r).toMatch(/keepa: active\.find\(\(j\) => j\.status === "running" && j\.kind === "keepa"\)/);
     expect(r).toMatch(/queued: active\.filter\(\(j\) => j\.status === "queued"\)/);
     expect(s).toMatch(/laneAhead\(job, await listActive\(query\)\)/);
     expect(readFileSync(join(__dirname, "bulk.ts"), "utf8")).toMatch(/laneAhead\(job, await listActive\(query\)\)/);

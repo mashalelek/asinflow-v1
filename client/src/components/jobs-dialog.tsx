@@ -15,7 +15,7 @@ import { StageResultsList } from "@/components/stage-results";
 import { ListingHygienePanel, ListingChangesPanel } from "@/components/listing-hygiene-panel";
 import { LastPassBanner } from "@/components/last-pass-banner";
 import {
-  listJobs, getJob, cancelJob, failedStepsText, formatDuration, jobDurationMs, groupFlips, groupListingActions, changeCount, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText,
+  listJobs, getJob, cancelJob, failedStepsText, formatDuration, jobDurationMs, groupFlips, groupListingActions, changeCount, failedAsinsFromRuns, componentLabel, jobKindLabel, progressText, keepaIncompleteCount,
   FOCUS_ASIN_EVENT, type Job, type ComponentRun, type FlipGroups,
 } from "@/lib/jobs-api";
 
@@ -136,6 +136,7 @@ export function JobsDialog({ open, onOpenChange, onRetry, initialJobId }: {
                     <span className="w-24">{durationOf(j)}</span>
                     {failedStepsText(j.summary) && <span className="text-destructive whitespace-nowrap shrink-0">{failedStepsText(j.summary)}</span>}
                     {flipCount > 0 && <span className="text-amber-600">{flipCount} change{flipCount === 1 ? "" : "s"}</span>}
+                    {keepaIncompleteCount(j) > 0 && <span className="text-amber-600 whitespace-nowrap shrink-0" data-testid={`keepa-incomplete-${j.id}`}>{keepaIncompleteCount(j)} not fetched today</span>}
                     {j.status === "running" && j.progress?.component != null && (
                       <span className="text-muted-foreground">{componentLabel(j.progress.component)} {progressText(j.progress) || `${j.progress.position ?? 0}/${j.progress.total ?? "?"}`}</span>
                     )}

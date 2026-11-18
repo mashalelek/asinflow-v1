@@ -5,19 +5,30 @@
 // order. Scheduled passes and the Refresh button enqueue the same job with
 // different scopes. Nothing refreshes data outside the queue.
 
-export type JobKind = "refresh";
+/** 'refresh' = SP-API / sheet refresh (lanes S and M); 'keepa' = Keepa history (lane K, migration 121, 2026-11-18). */
+export type JobKind = "refresh" | "keepa";
 export type JobTrigger = "scheduled" | "manual" | "onboarding" | "bulk";
 
 /**
- * Two lanes (Maria, 2026-10-16: manual actions never wait on the scheduled
- * pass). Lane S = the scheduled pass, one at a time. Lane M = everything a
+ * Three lanes. Lane S = the scheduled pass, one at a time. Lane M = everything a
  * person or an onboarding started (manual, onboarding, bulk), one at a time
- * in queue order. Both lanes run concurrently in the same process; a lane M
- * job starts the moment it is enqueued if lane M is idle.
+ * in queue order (Maria, 2026-10-16: manual actions never wait on the scheduled
+ * pass). Lane K = Keepa jobs (kind 'keepa': the daily job, trigger 'scheduled',
+ * and new-ASIN jobs, trigger 'onboarding'), one at a time — a different API
+ * writing different tables, so a Keepa job waiting for tokens holds nothing up
+ * (docs/claude_spec-patch-keepa-trends.md "Fetching: lane K"). All lanes run
+ * concurrently in the same process; a job starts the moment it is enqueued if
+ * its lane is idle.
  */
-export type Lane = "S" | "M";
-export const LANE_TRIGGERS: Record<Lane, readonly JobTrigger[]> = { S: ["scheduled"], M: ["manual", "onboarding", "bulk"] };
-export function laneOf(trigger: JobTrigger): Lane { return trigger === "scheduled" ? "S" : "M"; }
+export type Lane = "S" | "M" | "K";
+export const LANE_TRIGGERS: Record<Lane, readonly JobTrigger[]> = { S: ["scheduled"], M: ["manual", "onboarding", "bulk"], K: ["scheduled", "onboarding"] };
+export const LANE_KIND: Record<Lane, JobKind> = { S: "refresh", M: "refresh", K: "keepa" };
+export function laneOf(job: Pick<JobRow, "kind" | "trigger">): Lane {
+  if (job.kind === "keepa") return "K";
+  return job.trigger === "scheduled" ? "S" : "M";
+}
+/** The components a Keepa job runs — and that no refresh job ever runs: 33 Keepa history. */
+export const KEEPA_COMPONENTS: readonly number[] = [33];
 
 /**
  * An onboarding job runs ONLY the per-ASIN components for its scope: the

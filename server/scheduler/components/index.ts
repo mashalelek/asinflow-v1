@@ -37,6 +37,7 @@ import { poDocuments } from "./29-po-documents";
 import { claimTimers } from "./30-claim-timers";
 import { carrierTracking } from "./31-carrier-tracking";
 import { carrierSweep } from "./32-carrier-sweep";
+import { keepaHistory } from "./33-keepa";
 import type { ComponentDef } from "../types";
 
 export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
@@ -50,6 +51,7 @@ export const COMPONENTS: readonly ComponentDef[] = Object.freeze([
   claimTimers,
   carrierTracking,
   carrierSweep,
+  keepaHistory, // Keepa jobs only (lane K) — planFor keeps it out of every refresh job
 ]);
 
 // The order is a fact, not a convention: fail loudly at import if it drifts.

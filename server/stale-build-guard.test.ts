@@ -48,7 +48,7 @@ describe("stale-page guard (2026-10-18)", () => {
 });
 
 describe("onboarding dedupe (2026-10-18)", () => {
-  const fake = (rows: any[]) => { const calls: any[] = []; return { calls, q: async (sql: string, params?: any[]) => { calls.push({ sql, params }); return { rows: /FROM jobs\s+WHERE trigger = 'onboarding'/.test(sql) ? rows : [], rowCount: rows.length }; } }; };
+  const fake = (rows: any[]) => { const calls: any[] = []; return { calls, q: async (sql: string, params?: any[]) => { calls.push({ sql, params }); return { rows: /FROM jobs\s+WHERE kind = 'refresh' AND trigger = 'onboarding'/.test(sql) ? rows : [], rowCount: rows.length }; } }; };
   it("looks for the same ASIN set (sorted, upper-cased) queued in the last 10 minutes, any status", async () => {
     const f = fake([{ id: 64, status: "done", queued_at: new Date() }]);
     expect(await findRecentSameOnboarding(["b09hrdgw17", "B07K1N4K54", "B09HRDGW17"], f.q as any)).toMatchObject({ id: 64, status: "done" });
