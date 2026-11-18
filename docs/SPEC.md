@@ -789,20 +789,16 @@ A quantity label always names its kind — *ASIN units*, *Product units* or
 Actual / Estimated pattern of the ASINs table), never in parentheses and
 never below. See §22 "Quantity vocabulary".
 
-### Palette: warm stone
+### Palette: warm stone — dark only
 
-Light mode:
-- Page bg: `#F5F4EF`
-- Card/tile bg: `#FFFFFF`
-- Controls bar: `#E7E5E4`
-- Table column header: `#44403C` (dark stone, white text)
-- Table row default: `#FFFFFF`
-- Table row zebra: `#FAFAFA`
-- Top nav: `#292524` (deep stone, white text)
-- Top nav active pill: `#44403C`
-- Primary text: `#1C1917`
-- Secondary text: `#78716C`
-- Tertiary text: `#A8A29E`
+**AF renders dark for every user (2026-11-18).** Light mode was removed
+(`docs/claude_spec-patch-remove-view-presets-and-light-mode.md`): the theme
+toggle left the header, the stored preference (`fba-theme`) and the OS
+`prefers-color-scheme` are no longer read, `dark` is set once on `<html>` in
+`client/index.html`, and `client/src/index.css` holds one token block under
+`:root` (the dark values; the light block and the `.dark` override are gone).
+Tailwind's `dark:` utilities still apply through the root class. Maria never
+used light mode; the partner and the VA see the same dark AF.
 
 Dark mode:
 - Page bg: `#1C1917`
@@ -817,8 +813,8 @@ Dark mode:
 - Secondary text: `#A8A29E`
 - Tertiary text: `#78716C`
 
-Top nav and table column header keep dark surfaces in both light and dark
-page modes — that's intentional.
+Top nav and table column header keep their own dark surfaces — that's
+intentional.
 
 ### Layering principles
 
@@ -936,7 +932,6 @@ Items in order:
   DATE_PICKER_ROUTES is what guarantees that. Nav structure otherwise
   unchanged.
 - **Shipments** — disabled, "Soon" badge
-- (right side) **Dark mode toggle**
 
 Disabled items: muted text, no hover state, not clickable. The "Soon" badge
 indicates a planned future module.
@@ -9994,8 +9989,8 @@ browser (`af-dashboard-chart-range`). Running sums are computed in SQL
 (`generate_series` + a 29-PRECEDING window over 0-filled days, started 29
 days early), never on the client. A Sales series whose range starts before
 the earliest `sale_date` is drawn from that date and the chart says so.
-Series colours: AF's `--chart-1` / `--chart-2` in light mode, validated
-darker steps in dark mode (`SERIES_COLORS`). The 30-day running series is
+Series colours: the validated dark steps (`SERIES_COLORS`; the light pair
+went with light mode, 2026-11-18). The 30-day running series is
 the slow one (~1.1 s locally: a distinct-orders count per day).
 
 ### Sales ingestion (component 19, D7 / C2) — see §11

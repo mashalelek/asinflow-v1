@@ -8,7 +8,7 @@ import { DASHBOARD_ROWS } from "@shared/dashboard";
 // Dashboard tiles (patch docs/claude_spec-patch-dashboard-tiles.md §1.3, §1.5):
 // one card per range column with a band by position, three hairline sections,
 // 28 px main values, a 2-column sub-metric grid, visible dim Profit rows,
-// no "More" link; the band variables exist in both themes.
+// no "More" link; the band variables exist under :root (AF is dark only since 2026-11-18).
 const tiles = readFileSync(resolve(__dirname, "metric-tiles.tsx"), "utf8");
 const css = readFileSync(resolve(__dirname, "../index.css"), "utf8");
 
@@ -18,10 +18,9 @@ describe("bands", () => {
     expect(bandVar(4, 5)).toBe("var(--dash-band-5)");
     expect(bandVar(0, 1)).toBe("var(--dash-band-1)");
   });
-  it("--dash-band-1…5 are defined under :root and .dark with the approved hexes, and the tiles use the variables, never inline hexes", () => {
-    const root = css.slice(css.indexOf(":root {"), css.indexOf(".dark {"));
-    const dark = css.slice(css.indexOf(".dark {"));
-    expect(root).toMatch(/--dash-band-1: #4A5F78;[\s\S]*--dash-band-2: #4E6B7E;[\s\S]*--dash-band-3: #55767E;[\s\S]*--dash-band-4: #5E7E7B;[\s\S]*--dash-band-5: #66847A;/);
+  it("--dash-band-1…5 are defined once under :root with the approved dark hexes, and the tiles use the variables, never inline hexes", () => {
+    expect(css).not.toMatch(/^\.dark \{/m);
+    const dark = css.slice(css.indexOf(":root {"));
     expect(dark).toMatch(/--dash-band-1: #3A4F68;[\s\S]*--dash-band-2: #3E5B6E;[\s\S]*--dash-band-3: #45666E;[\s\S]*--dash-band-4: #4E6E6B;[\s\S]*--dash-band-5: #56746A;/);
     expect(tiles).toMatch(/backgroundColor: bandVar\(index, count\)/);
     expect(tiles.match(/#[0-9A-Fa-f]{6}/g)).toEqual(["#FAFAF9", "#E7E5E4"]); // only the two band ink colours from the mockup

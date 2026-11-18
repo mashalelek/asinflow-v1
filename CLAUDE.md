@@ -42,6 +42,7 @@ This app runs on the following stack. This is settled. Do not suggest alternativ
 - Include Inbound Shipping toggle
 - `amzn.gr.*` SKUs excluded from primary SKU selection
 - `in_catalog` is gone (migration 052, 2026-10-15); `has_live_offer` is the listing fact (SPEC §18)
+- Dark only (light mode removed 2026-11-18): `<html class="dark">` in `client/index.html`, one token block in `client/src/index.css`, no theme toggle, no stored preference, no `prefers-color-scheme` read
 
 ### Key files:
 - `server/index.ts` — Express server entry point

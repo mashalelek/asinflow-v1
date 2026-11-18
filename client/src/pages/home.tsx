@@ -21,7 +21,6 @@ import { ResultsTable, getRowValue, isSubmissionPending } from "@/components/res
 import { ExportButtons } from "@/components/export-buttons";
 import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
-import { useTheme } from "@/components/theme-provider";
 import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
 import { useSearch } from "wouter";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
@@ -334,7 +333,6 @@ type ScExportRecord = {
 };
 
 export default function Home() {
-  // Theme toggle is now in the top nav
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);

@@ -2,120 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
-/* LIGHT MODE — Warm Stone palette */
+/* Warm Stone palette — dark only (light mode removed 2026-11-18; <html class="dark"> is set once in index.html for the dark: utilities) */
 :root {
-  --button-outline: rgba(120, 113, 108, .15);
-  --badge-outline: rgba(120, 113, 108, .08);
-  --opaque-button-border-intensity: -8;
-  --elevate-1: rgba(0,0,0, .03);
-  --elevate-2: rgba(0,0,0, .08);
-  --background: 50 23% 95%;
-  --foreground: 24 10% 10%;
-  --border: 25 5% 45% / 0.15;
-  --card: 0 0% 100%;
-  --card-foreground: 24 10% 10%;
-  --card-border: 25 5% 45% / 0.15;
-  --sidebar: 20 6% 90%;
-  --sidebar-foreground: 24 10% 10%;
-  --sidebar-border: 25 5% 45% / 0.15;
-  --sidebar-primary: 217 91% 60%;
-  --sidebar-primary-foreground: 0 0% 98%;
-  --sidebar-accent: 20 6% 90%;
-  --sidebar-accent-foreground: 24 10% 10%;
-  --sidebar-ring: 217 91% 60%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 24 10% 10%;
-  --popover-border: 25 5% 45% / 0.15;
-  --primary: 217 91% 60%;
-  --primary-foreground: 0 0% 98%;
-  --secondary: 20 6% 90%;
-  --secondary-foreground: 24 10% 10%;
-  --muted: 20 6% 90%;
-  --muted-foreground: 25 5% 45%;
-  --accent: 20 6% 90%;
-  --accent-foreground: 24 10% 10%;
-  --destructive: 0 84% 45%;
-  --destructive-foreground: 0 0% 98%;
-  --input: 25 5% 65%;
-  --ring: 217 91% 60%;
-
-  /* Action-button semantic tokens (light). Scoped to toolbar action buttons —
-     intentionally separate from --primary/--destructive/--accent which are
-     used app-wide and differ from these target hues. Hex values are stored
-     as raw values (not HSL-only) because they're consumed directly in
-     Tailwind arbitrary-value classes.
-     Only Archive remains tokenized — push (Add to SC) and analyze tokens
-     were removed when those buttons reverted to neutral outline (2026-06-29). */
-  --action-archive-border: #A32D2D;    /* Archive border + text */
-  --action-archive-text: #A32D2D;
-
-  --nav: 12 6% 15%;
-  --nav-foreground: 60 5% 96%;
-  --nav-active: 30 6% 25%;
-  --table-header: 30 6% 25%;
-  --table-header-foreground: 0 0% 100%;
-  --table-zebra: 60 9% 98%;
-  --est-group-bg: 48 96% 89%;
-  --est-group-text: 22 78% 26%;
-  --act-group-bg: 141 84% 93%;
-  --act-group-text: 144 61% 20%;
-  --chart-1: 217 91% 45%;
-  --chart-2: 173 80% 35%;
-  --chart-3: 43 90% 45%;
-  --chart-4: 27 87% 50%;
-  --chart-5: 340 75% 48%;
-  /* Dashboard tile header bands (SPEC §28, tiles patch 2026-11-04): a muted dusk-blue → slate-teal ramp by column
-     position, the only colour on the page; band-5 is set 3's fifth column, Custom takes band-1. */
-  --dash-band-1: #4A5F78;
-  --dash-band-2: #4E6B7E;
-  --dash-band-3: #55767E;
-  --dash-band-4: #5E7E7B;
-  --dash-band-5: #66847A;
   --font-sans: Open Sans, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: Menlo, monospace;
   --radius: .5rem;
-  --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
-  --shadow-xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
-  --shadow-sm: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 1px 2px -1px hsl(0 0% 0% / 0.00);
-  --shadow: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 1px 2px -1px hsl(0 0% 0% / 0.00);
-  --shadow-md: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 2px 4px -1px hsl(0 0% 0% / 0.00);
-  --shadow-lg: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 4px 6px -1px hsl(0 0% 0% / 0.00);
-  --shadow-xl: 0px 2px 0px 0px hsl(0 0% 0% / 0.00), 0px 8px 10px -1px hsl(0 0% 0% / 0.00);
-  --shadow-2xl: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
 
-/* Fallback for older browsers */
-  --sidebar-primary-border: hsl(var(--sidebar-primary));
-  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-
-  /* Fallback for older browsers */
-  --sidebar-accent-border: hsl(var(--sidebar-accent));
-  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-
-  /* Fallback for older browsers */
-  --primary-border: hsl(var(--primary));
-  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-
-  /* Fallback for older browsers */
-  --secondary-border: hsl(var(--secondary));
-  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-
-  /* Fallback for older browsers */
-  --muted-border: hsl(var(--muted));
-  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-
-  /* Fallback for older browsers */
-  --accent-border: hsl(var(--accent));
-  --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-
-  /* Fallback for older browsers */
-  --destructive-border: hsl(var(--destructive));
-  --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
-}
-
-.dark {
   --button-outline: rgba(255,255,255, .10);
   --badge-outline: rgba(255,255,255, .05);
   --opaque-button-border-intensity: 9;
@@ -234,10 +129,6 @@
 }
 
 .table-zebra-stone {
-  border-bottom: 0.5px solid rgba(120, 113, 108, 0.10);
-}
-
-.dark .table-zebra-stone {
   border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
 }
 

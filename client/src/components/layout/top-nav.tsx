@@ -1,6 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { useTheme } from "@/components/theme-provider";
-import { Sun, Moon, Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound, Repeat, LayoutDashboard, ClipboardList } from "lucide-react";
+import { Package, BarChart3, Calculator, ShoppingCart, CreditCard, TrendingUp, Truck, Settings, LogOut, UserRound, Repeat, LayoutDashboard, ClipboardList } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
@@ -47,7 +46,6 @@ export const OPEN_SETTINGS_EVENT = "asinflow:open-settings";
 
 export function TopNav() {
   const [location] = useLocation();
-  const { theme, toggleTheme } = useTheme();
   const { range, setRange } = useDateRange();
   const { user, logout } = useAuth();
 
@@ -109,7 +107,7 @@ export function TopNav() {
         })}
       </nav>
 
-      {/* Right side utilities — order: Date Picker | Theme toggle | Settings | User */}
+      {/* Right side utilities — order: Date Picker | Settings | User (the theme toggle went 2026-11-18: AF is dark only) */}
       <div className="ml-auto flex items-center gap-2 min-w-0 shrink-0">
         {/* Listing hygiene: a held close / delete run, on every page until released. */}
         {user && <ActionRequired />}
@@ -117,16 +115,6 @@ export function TopNav() {
         {showDatePicker && (
           <DataStudioDatePicker value={range} onApply={setRange} />
         )}
-
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={toggleTheme}
-          className="text-inherit hover:bg-white/10"
-          title="Toggle theme"
-        >
-          {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-        </Button>
 
         {showSettings && (
           <Button

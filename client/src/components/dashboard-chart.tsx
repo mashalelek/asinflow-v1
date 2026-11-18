@@ -17,15 +17,12 @@
 import { useMemo, useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card } from "@/components/ui/card";
-import { useTheme } from "@/components/theme-provider";
 import { fmtMoney, fmtInt, fmtRangeLabel } from "@/components/metric-grid";
 import type { DashboardSeries, SeriesKind, SeriesPoint } from "@shared/dashboard";
 
 /** Series colours: light = AF's --chart-1 / --chart-2; dark = steps validated on the dark card surface (#292524). */
-export const SERIES_COLORS = {
-  light: { sales: "#0a5adb", spend: "#12a190" },
-  dark: { sales: "#3c83f6", spend: "#12a594" },
-} as const;
+// AF is dark only (2026-11-18): the validated dark steps; the light pair (#0a5adb / #12a190) went with light mode.
+export const SERIES_COLORS = { sales: "#3c83f6", spend: "#12a594" } as const;
 
 export const CHART_TITLES: Record<SeriesKind, string> = { running30: "30-day running", monthly: "Monthly", weekly: "Weekly" };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -61,8 +58,7 @@ export interface DashboardChartProps {
 }
 
 export function DashboardChart({ kind, series, loading, showSales, showSpend, onToggle }: DashboardChartProps) {
-  const { theme } = useTheme();
-  const colors = theme === "dark" ? SERIES_COLORS.dark : SERIES_COLORS.light;
+  const colors = SERIES_COLORS;
   const [table, setTable] = useState(false);
   const points = series?.points ?? [];
   const partialLast = points.length > 0 && points[points.length - 1].partial;

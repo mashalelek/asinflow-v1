@@ -46,7 +46,7 @@ describe("DashboardChart — marks, series toggles, quiet chrome", () => {
     expect(CHART_TITLES).toEqual({ running30: "30-day running", monthly: "Monthly", weekly: "Weekly" });
   });
   it("series colours follow the entity, not the mark: Sales keeps the blue slot (now the line), Spend the teal one (now the bars)", () => {
-    expect(SERIES_COLORS).toEqual({ light: { sales: "#0a5adb", spend: "#12a190" }, dark: { sales: "#3c83f6", spend: "#12a594" } });
+    expect(SERIES_COLORS).toEqual({ sales: "#3c83f6", spend: "#12a594" }); // dark only since 2026-11-18
   });
 });
 

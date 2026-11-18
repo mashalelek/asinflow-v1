@@ -8,7 +8,6 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { ResultsTable, getRowValue } from "@/components/results-table";
 import { GroupedTable, type GroupData } from "@/components/grouped-table";
 import { ColumnManager } from "@/components/column-manager";
-// Theme toggle is now in the top nav
 import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
 import { loadColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { Sun, Moon, BarChart3, Search, X, Filter } from "lucide-react";
@@ -102,7 +101,6 @@ function loadColFilters(): FilterMap {
 }
 
 export default function Analytics() {
-  // Theme toggle moved to top nav
   const { toast } = useToast();
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColConfig);
