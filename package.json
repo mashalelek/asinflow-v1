@@ -24,6 +24,7 @@
     "backfill:ledger": "tsx script/backfill-ledger.ts",
     "gmail:check": "tsx script/gmail-check.ts",
     "velocity:tracking-probe": "tsx script/velocity-tracking-probe.ts",
+    "keepa:spike": "tsx script/keepa-spike.ts",
     "backfill:tracking": "tsx script/backfill-tracking.ts",
     "easypost:count": "tsx script/easypost-cost-guard.ts",
     "claims:suggest": "tsx script/claims-suggest.ts",
