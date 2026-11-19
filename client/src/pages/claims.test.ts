@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decideOrder, matchesFilter, matchesView, searchMatchHint, qtyText, prefillMethod, productText, sortClaimRows, nextClaimsSort, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, claimsGrid, resizableClaimColumn, CLAIMS_COL_WIDTHS_KEY, NOTE_CLAMP_LINES, type ClaimRowApi, type ClaimsSort } from "./claims";
+import { readClaimsUrl, writeClaimsUrl, rowsForView, groupNeedsAttention, decideOrder, matchesFilter, matchesView, searchMatchHint, qtyText, prefillMethod, productText, sortClaimRows, nextClaimsSort, CLAIM_COLUMNS, CLAIMS_TABLE_WIDTH, CLAIMS_GRID, claimsGrid, resizableClaimColumn, claimColumnMin, fitClaimWidths, CLAIMS_SHRINK_ORDER, STEP_MIN, CLAIMS_COL_WIDTHS_KEY, NOTE_CLAMP_LINES, type ClaimRowApi, type ClaimsSort } from "./claims";
 import { newestPoFirst } from "@shared/claim-bucket";
 
 // The Claims page (SPEC §22 "Supplier claims" §5 amended 2026-11-12, commit 2b): URL state, the filter box, the view's rows, the Needs attention groups, the labels, the table.
@@ -119,13 +119,12 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     expect(prefillMethod([{ method: "gift_card" }, { method: "card" }])).toBe("gift_card");
     expect(prefillMethod([])).toBe("card");
   });
-  it("the list is the mockup's grid with Product widened and PO date added (28 · 140 · 80 · 240 · 120 · 100 · 110 · minmax(0,1fr) · 70 · 180, 12 px gaps) and fits 1280; the mockup's nine columns; the Qty header names its kind on the muted line above (the quantity-names rule wins there, Maria 2026-11-12); columns resizable through the PO table's hook, Step takes the rest", () => {
-    expect(CLAIMS_TABLE_WIDTH).toBeLessThanOrEqual(1280 - 48);
+  it("the list is the mockup's grid with Product widened and PO date added (28 · 140 · 80 · 240 · 120 · 100 · 110 · Step ≥ 220 · 70 · 180, 12 px gaps); the mockup's nine columns; the Qty header names its kind on the muted line above (the quantity-names rule wins there, Maria 2026-11-12); columns resizable through the PO table's hook, Step takes the rest", () => {
     expect(CLAIMS_TABLE_WIDTH).toBe(1176);
-    expect(CLAIMS_GRID).toBe("28px 140px 80px 240px 120px 100px 110px minmax(0, 1fr) 70px 180px");
+    expect(CLAIMS_GRID).toBe("28px 140px 80px 240px 120px 100px 110px minmax(220px, 1fr) 70px 180px");
     expect(CLAIM_COLUMNS.find((c) => c.id === "product")!.width).toBe(240);
-    expect(claimsGrid({ product: 320, waiting: 80 })).toBe("28px 140px 80px 320px 120px 100px 110px minmax(0, 1fr) 80px 180px");
-    expect(CLAIM_COLUMNS.filter(resizableClaimColumn).map((c) => c.id)).toEqual(["supplier", "podate", "product", "kind", "qty", "owed", "waiting", "do"]);
+    expect(claimsGrid({ product: 320, waiting: 80 })).toBe("28px 140px 80px 320px 120px 100px 110px minmax(220px, 1fr) 80px 180px");
+    expect(CLAIM_COLUMNS.filter(resizableClaimColumn).map((c) => c.id)).toEqual(CLAIM_COLUMNS.map((c) => c.id)); // every column, 2026-11-18
     expect(CLAIMS_COL_WIDTHS_KEY).toBe("claims-col-widths");
     const hook = readFileSync("client/src/hooks/use-column-widths.tsx", "utf8");
     expect(hook).toContain('closest("th, [data-resize-col]")');
@@ -143,12 +142,12 @@ describe("Needs attention groups, labels, the method prefill, the table", () => 
     }
     expect(css).toContain(".cl{margin:0;background:#181716;color:#e6e3dc;font-family:Inter,system-ui,sans-serif;font-size:13px");
     expect(page).toContain('import "./claims.css"');
-    expect(page).toContain("useColumnWidths(CLAIMS_COL_WIDTHS_KEY)");
-    expect(page).toContain('"--claims-grid": claimsGrid(colWidths)');
+    expect(page).toContain("useColumnWidths(CLAIMS_COL_WIDTHS_KEY, claimColumnMin)");
+    expect(page).toContain('"--claims-grid": claimsGrid(fit.widths)');
     expect(page).toMatch(/data-resize-col=\{resizableClaimColumn\(c\) \? c\.id : undefined\}/);
     expect(page).toMatch(/\{resizableClaimColumn\(c\) && <ResizeHandle onMouseDown=\{\(e\) => handleResizeStart\(e, c\.id\)\} \/>\}/);
     expect(page).toMatch(/onClick=\{resetWidths\} data-testid="button-claims-reset-widths">Reset widths</);
-    expect(css).toContain(".cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 80px 240px 120px 100px 110px minmax(0,1fr) 70px 180px)}");
+    expect(css).toContain(".cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 80px 240px 120px 100px 110px minmax(220px,1fr) 70px 180px)}");
     // the timeline note sits in the entry column, wraps, clamps past 3 lines with "more" (Maria 2026-11-12: a 300-character summary fell into the dot column)
     expect(css).toContain(".cl .tl .n{width:auto;height:auto;border:0;border-radius:0;display:block;font-size:inherit;color:#a39f96}");
     expect(page).toContain("<TimelineNote id={e.id} text={`${note}${e.by_name ? ` · ${e.by_name}` : \"\"}`} email={e.gmail_message_id ? { id: e.gmail_message_id, mailbox: e.mailbox ?? \"\" } : null} />");
@@ -193,7 +192,6 @@ describe("PO date column and sort (Maria 2026-11-18)", () => {
     expect(CLAIM_COLUMNS.find((c) => c.id === "podate")).toMatchObject({ label: "PO date", width: 80, sortKey: "po_date" });
     expect(CLAIM_COLUMNS.find((c) => c.id === "step")!.width).toBe("1fr"); // Step is still the flexible column; the 80 px came out of it
     expect(CLAIMS_TABLE_WIDTH).toBe(1084 + 80 + 12);
-    expect(CLAIMS_TABLE_WIDTH).toBeLessThanOrEqual(1280 - 48);
     expect(page).toContain('<span className="mut" data-testid={`claim-po-date-${c.id}`}>{fmtDate(c.order_date)}</span>');
     expect(page).toContain("const fmtDate = (iso: string | null | undefined) => { if (!iso) return \"—\"; const [y, m, d] = iso.slice(0, 10).split(\"-\"); return `${Number(m)}/${Number(d)}/${y}`; };");
     expect(readFileSync("client/src/pages/purchase-orders.tsx", "utf8")).toContain("const [y, m, d] = iso.slice(0, 10).split(\"-\");\n  return `${Number(m)}/${Number(d)}/${y}`;");
@@ -263,5 +261,65 @@ describe("PO date column and sort (Maria 2026-11-18)", () => {
     expect(readFileSync("client/src/pages/claims.css", "utf8")).toContain(".cl .cp{");
     // a whole-PO claim has no ASIN cell to copy
     expect(productText(row({ po_line_item_id: null, kind: "canceled" })).sub).toBe("all lines");
+  });
+});
+
+// ── Resizable columns, the fit, persistence, reset (Maria 2026-11-18: "I cannot resize columns on the Claims list") ──
+describe("Claims list column widths (Maria 2026-11-18)", () => {
+  const page = readFileSync("client/src/pages/claims.tsx", "utf8");
+  const hook = readFileSync("client/src/hooks/use-column-widths.tsx", "utf8");
+  const css = readFileSync("client/src/pages/claims.css", "utf8");
+  const defaults = Object.fromEntries(CLAIM_COLUMNS.map((c) => [c.id, c.width === "1fr" ? c.min : c.width]));
+  it("every column has a handle on its header edge, each with its own minimum; the header row's hover shows every divider; the handle is the POs list's", () => {
+    expect(CLAIM_COLUMNS.every(resizableClaimColumn)).toBe(true);
+    expect(CLAIM_COLUMNS.map((c) => [c.id, c.min])).toEqual([["chk", 28], ["supplier", 100], ["podate", 76], ["product", 160], ["kind", 100], ["qty", 84], ["owed", 90], ["step", 220], ["waiting", 60], ["do", 150]]);
+    expect(claimColumnMin("step")).toBe(STEP_MIN);
+    expect(claimColumnMin("nope")).toBe(50);
+    expect(page).toMatch(/\{resizableClaimColumn\(c\) && <ResizeHandle onMouseDown=\{\(e\) => handleResizeStart\(e, c\.id\)\} \/>\}/);
+    expect(hook).toContain('data-resize-handle=""');
+    expect(hook).toContain('const newW = Math.max(typeof minWidth === "function" ? minWidth(resizeRef.current.colId) : minWidth, resizeRef.current.startW + delta);');
+    expect(hook).toContain('onMouseLeave={() => { if (lineRef.current) lineRef.current.style.background = ""; }}'); // leaves the stylesheet's hover divider in place
+    expect(css).toContain(".cl .hd:hover [data-resize-handle]>div{background:#3a3733}");
+    expect(readFileSync("client/src/pages/purchase-orders.tsx", "utf8")).toContain("<ResizeHandle onMouseDown={(e) => handleResizeStart(e, c.id)} />"); // the same handle
+  });
+  it("the fit at 1280 with the defaults: Step 220, the room taken from Product (down to 160) and Supplier · PO (to 100) first, then Do and Kind; no overflow; at 1440 Step ≥ 220 with Product almost untouched; a wide box gives Step the spare room", () => {
+    const at1280 = fitClaimWidths(1280 - 48);
+    expect(at1280.overflow).toBe(false);
+    expect(at1280.total).toBe(1232);
+    expect(at1280.widths).toMatchObject({ step: 220, product: 160, supplier: 100, do: 150, kind: 106, owed: 110, qty: 100, podate: 80, waiting: 70, chk: 28 });
+    const at1440 = fitClaimWidths(1440 - 48);
+    expect(at1440.overflow).toBe(false);
+    expect(at1440.total).toBe(1392);
+    expect(at1440.widths).toMatchObject({ step: 220, product: 236, supplier: 140, do: 180, kind: 120 });
+    const wide = fitClaimWidths(2133 - 48);
+    expect(wide.widths).toMatchObject({ ...defaults, step: 2085 - 1176 });
+    expect(wide.total).toBe(2085);
+    expect(CLAIMS_SHRINK_ORDER.slice(0, 2)).toEqual(["product", "supplier"]);
+    // the shrink order names only shrinkable fixed columns, Step and the checkbox never
+    expect(CLAIMS_SHRINK_ORDER).not.toContain("step"); expect(CLAIMS_SHRINK_ORDER).not.toContain("chk");
+  });
+  it("a dragged width is kept as is (never given away by the fit, clamped to the column's minimum); a widened table overflows its box — the box scrolls, the page never does", () => {
+    const f = fitClaimWidths(1280 - 48, { product: 320 });
+    expect(f.widths.product).toBe(320);
+    expect(f.widths.step).toBe(220);
+    expect(f.widths.supplier).toBe(100); // the other defaults still give way
+    expect(f.overflow).toBe(true);
+    expect(f.total).toBeGreaterThan(1232);
+    expect(fitClaimWidths(1440 - 48, { step: 400 }).widths.step).toBe(400); // Step dragged wider: kept, the defaults give way for it
+    expect(fitClaimWidths(1440 - 48, { step: 400 }).widths.product).toBe(160);
+    expect(fitClaimWidths(2133 - 48, { step: 400 }).widths.step).toBe(2085 - 1176); // …and it still takes the spare room in a wide box
+    expect(fitClaimWidths(1440 - 48, { product: 10 }).widths.product).toBe(160); // below the minimum → the minimum
+    expect(page).toContain('style={{ padding: "4px 12px 24px", overflowX: "auto", "--claims-grid": claimsGrid(fit.widths) } as React.CSSProperties} data-testid="claims-box" data-overflow={fit.overflow ? "1" : undefined}>');
+    expect(page).toContain("<div style={{ minWidth: fit.total + 24 }}>");
+    expect(page).toContain("const fit = useMemo(() => fitClaimWidths(boxWidth - 48, colWidths), [boxWidth, colWidths]);");
+    expect(page).toContain("new ResizeObserver(measure)");
+  });
+  it("widths persist under claims-col-widths across reloads and the tabs (one key for the page), reset removes the key and the button shows only while a width is saved", () => {
+    expect(CLAIMS_COL_WIDTHS_KEY).toBe("claims-col-widths");
+    expect(page).toContain("useColumnWidths(CLAIMS_COL_WIDTHS_KEY, claimColumnMin)"); // one hook instance above the tabs: the same widths on every tab
+    expect(hook).toContain("const [colWidths, setColWidths] = useState<ColumnWidths>(() => loadColumnWidths(storageKey));");
+    expect(hook).toContain("try { localStorage.setItem(storageKey, JSON.stringify(widths)); } catch {}");
+    expect(hook).toContain("try { localStorage.removeItem(storageKey); } catch {}\n    setColWidths({});");
+    expect(page).toMatch(/\{Object\.keys\(colWidths\)\.length > 0 && <button type="button" className="lnk mut" [^>]*onClick=\{resetWidths\} data-testid="button-claims-reset-widths">Reset widths<\/button>\}/);
   });
 });

@@ -14,7 +14,8 @@ export function loadColumnWidths(storageKey: string): ColumnWidths {
   return {};
 }
 
-export function useColumnWidths(storageKey: string, minWidth = 50) {
+/** The hook; `minWidth` is one number for every column or a function of the column id (the Claims list's per-column minimums, 2026-11-18). */
+export function useColumnWidths(storageKey: string, minWidth: number | ((colId: string) => number) = 50) {
   const [colWidths, setColWidths] = useState<ColumnWidths>(() => loadColumnWidths(storageKey));
   const resizeRef = useRef<{ colId: string; startX: number; startW: number } | null>(null);
   const widthSaveTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -38,7 +39,7 @@ export function useColumnWidths(storageKey: string, minWidth = 50) {
     const onMove = (ev: MouseEvent) => {
       if (!resizeRef.current) return;
       const delta = ev.clientX - resizeRef.current.startX;
-      const newW = Math.max(minWidth, resizeRef.current.startW + delta);
+      const newW = Math.max(typeof minWidth === "function" ? minWidth(resizeRef.current.colId) : minWidth, resizeRef.current.startW + delta);
       // The column id is read NOW: the state updater runs later (React batches moves), and when the mouse is released
       // before that render the ref is already null — the page crashed on a fast drag (browser check 2026-11-12).
       const { colId: movedId } = resizeRef.current;
@@ -77,8 +78,9 @@ export function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEven
     <div
       onMouseDown={onMouseDown}
       onMouseEnter={() => { if (lineRef.current) lineRef.current.style.background = "hsl(var(--primary) / 0.5)"; }}
-      onMouseLeave={() => { if (lineRef.current) lineRef.current.style.background = "transparent"; }}
+      onMouseLeave={() => { if (lineRef.current) lineRef.current.style.background = ""; }}
       style={{ position: "absolute", right: -3, top: 0, bottom: 0, width: 7, cursor: "col-resize", zIndex: 10 }}
+      data-resize-handle=""
     >
       <div
         ref={lineRef}
@@ -89,7 +91,7 @@ export function ResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEven
           bottom: "15%",
           width: 2,
           borderRadius: 1,
-          background: "transparent",
+          // transparent until hovered (inline while the pointer is on the handle); a page may show every divider on header hover through a stylesheet rule on [data-resize-handle] (the Claims list, 2026-11-18)
           transition: "background 0.15s",
         }}
       />

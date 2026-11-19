@@ -6639,10 +6639,15 @@ Rules built in commit 1 (`server/supplier-claims.ts`, `shared/supplier-claim.ts`
   Timed out, each task a checkbox or the control its tick needs (a report's date + channel + note for Contact / Follow
   up; the reship order # for Confirm reship; Open / Dismiss for a suggestion; Enter quantity is typed; Refund received
   adds the refund row; Snooze on Check on it / Follow up). Decide's order (Maria 2026-11-12): suggestions with figures
-  first, then the rest, the converted claims still waiting on a quantity last (`decideOrder`). The list's columns are
-  resizable through the PO table's `use-column-widths` hook (widths per browser under `claims-col-widths`, Reset
-  widths beside the tabs; the grid reads `--claims-grid`), Product 240 px by default so names read, Step takes the
-  rest. Rows: Supplier · PO (a copy icon beside the order #) · PO date (the PO's order date, M/D/YYYY as on the POs
+  first, then the rest, the converted claims still waiting on a quantity last (`decideOrder`). **Every** column is
+  resizable by its header edge through the PO table's `use-column-widths` hook (Maria 2026-11-18 — the checkbox and
+  Step included; widths per browser profile under `claims-col-widths`, as the POs list's, since AF has no per-user
+  preference store; Reset widths beside the tabs; hovering the header row shows every divider), each down to its own
+  minimum (`CLAIM_COLUMNS[].min`). `fitClaimWidths` sets the grid from the box's width: a dragged width is kept as is,
+  Step is at least 220 px and takes the spare room, and when the box is narrower than the defaults allow the undragged
+  defaults give way in `CLAIMS_SHRINK_ORDER` — Product (240 → 160) and Supplier · PO (140 → 100) first, then Do, Kind,
+  Owed, Qty, PO date, Waiting — so at 1280 Step reads at 220 with no scroll; a table still wider than the box (dragged
+  widths) scrolls inside the box (`overflow-x: auto`), never the page. Rows: Supplier · PO (a copy icon beside the order #) · PO date (the PO's order date, M/D/YYYY as on the POs
   list, muted, 80 px taken from Step; Maria 2026-11-18) · Product (a copy icon beside the ASIN) · Kind · Qty
   (Individual units, the Product / ASIN equivalents in grey; "qty unknown" / "unknown (sheet zeroed the line)") · $
   owed / remaining · Step · Days in bucket · Next action. **Default sort: newest PO first** (`newestPoFirst` in

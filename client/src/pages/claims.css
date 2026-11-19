@@ -75,8 +75,12 @@
 .cl.cl-dialog>button.absolute{display:none}
 .cl.cl-dialog>div{padding:0!important}
 .cl.cl-dialog [data-testid^="dialog-resize-"]{display:none}
-/* Resizable columns (2026-11-12): the page sets --claims-grid from the saved widths; the defaults widen Product (28 140 80 240 120 100 110 minmax(0,1fr) 70 180 — PO date 80 px added 2026-11-18, taken from Step). */
-.cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 80px 240px 120px 100px 110px minmax(0,1fr) 70px 180px)}
+/* Resizable columns (2026-11-12, every column since 2026-11-18): the page sets --claims-grid from fitClaimWidths (the dragged widths over the defaults, Step ≥ 220 px with the spare room; the defaults 28 140 80 240 120 100 110 Step 70 180). */
+.cl .hd,.cl .row{grid-template-columns:var(--claims-grid,28px 140px 80px 240px 120px 100px 110px minmax(220px,1fr) 70px 180px)}
+/* the handles (Maria 2026-11-18: a handle you can see): hovering the header row shows every column divider; the one under the pointer brightens (the handle's own inline hover) */
+.cl .hd:hover [data-resize-handle]>div{background:#3a3733}
+/* a table wider than its box (dragged widths) scrolls inside the box, never the page */
+.cl .box{scrollbar-width:thin}
 /* PO date / Waiting headers sort (Maria 2026-11-18): the header text is the button, arrows like the POs list's */
 .cl .hd .sort{background:none;border:0;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
 .cl .hd .sort:hover{color:#e6e3dc}

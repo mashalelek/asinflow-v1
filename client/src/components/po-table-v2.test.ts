@@ -83,7 +83,7 @@ describe("resizable columns (commit 5): one shared mechanism", () => {
   it("the hook saves debounced under the caller's key, has a 50 px floor and a reset that removes the key", () => {
     expect(hook).toMatch(/localStorage\.setItem\(storageKey, JSON\.stringify\(widths\)\)/);
     expect(hook).toMatch(/}, 300\);/);
-    expect(hook).toMatch(/minWidth = 50/);
+    expect(hook).toMatch(/minWidth: number \| \(\(colId: string\) => number\) = 50/); // one number for every column, or per column (the Claims list, 2026-11-18)
     expect(hook).toMatch(/localStorage\.removeItem\(storageKey\)/);
   });
   it("every column has a default width (Maria 2026-11-04); a dragged width wins; the table is fixed at their sum", () => {

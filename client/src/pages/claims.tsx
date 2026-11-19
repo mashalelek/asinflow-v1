@@ -24,7 +24,7 @@
  * fixed-layout table (the conflict with the older rule noted, not resolved); the Qty header carries the muted
  * "Individual units" line above it — there the quantity-names rule wins (Maria 2026-11-12, the mockup omitted it).
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import "./claims.css";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -200,30 +200,60 @@ export function productText(c: Pick<ClaimRowApi, "po_line_item_id" | "product_na
   return { main: c.product_name ?? c.asin ?? "line", sub: c.asin ?? "" };
 }
 
-// ── Columns: the mockup's grid, widened Product (Maria 2026-11-12): 28 · 140 · 80 · 240 · 120 · 100 · 110 · 1fr · 70 · 180, 12 px gaps ──
-// PO date (Maria 2026-11-18) sits between Supplier · PO and Product; its 80 px came out of Step (the 1fr column), so the fixed part grew to 1,176 px.
-// Resizable (the PO table's use-column-widths hook; widths per browser under CLAIMS_COL_WIDTHS_KEY); Step takes the rest, as minmax(0, 1fr) so the grid never overflows the page.
+// ── Columns: the mockup's grid, widened Product (Maria 2026-11-12): 28 · 140 · 80 · 240 · 120 · 100 · 110 · Step · 70 · 180, 12 px gaps ──
+// PO date (Maria 2026-11-18) sits between Supplier · PO and Product. Every column is resizable by its header edge (the PO table's
+// use-column-widths hook, widths per browser under CLAIMS_COL_WIDTHS_KEY, Reset widths beside the tabs), each down to its `min`.
+// Step is at least 220 px and takes the spare room; when the box is narrower than the defaults allow, the default widths give way
+// in CLAIMS_SHRINK_ORDER (Product down to 160, then Supplier · PO, then the rest) — never a width the user dragged — and a table
+// still wider than the box scrolls inside the box (`fitClaimWidths`), never the page (Maria 2026-11-18).
 
-export const CLAIM_COLUMNS: ReadonlyArray<{ id: string; label: string; width: number | "1fr"; kind?: string; /** The header sorts (asc / desc) on this key. */ sortKey?: "po_date" | "waiting" }> = [
-  { id: "chk", label: "", width: 28 },
-  { id: "supplier", label: "Supplier · PO", width: 140 },
-  { id: "podate", label: "PO date", width: 80, sortKey: "po_date" },
-  { id: "product", label: "Product", width: 240 },
-  { id: "kind", label: "Kind", width: 120 },
-  { id: "qty", label: "Qty", width: 100, kind: QTY_KIND.individual },
-  { id: "owed", label: "Owed / left", width: 110 },
-  { id: "step", label: "Step", width: "1fr" },
-  { id: "waiting", label: "Waiting", width: 70, sortKey: "waiting" },
-  { id: "do", label: "Do", width: 180 },
+export const CLAIM_COLUMNS: ReadonlyArray<{ id: string; label: string; width: number | "1fr"; /** The narrowest a drag or the fit may make it. */ min: number; kind?: string; /** The header sorts (asc / desc) on this key. */ sortKey?: "po_date" | "waiting" }> = [
+  { id: "chk", label: "", width: 28, min: 28 },
+  { id: "supplier", label: "Supplier · PO", width: 140, min: 100 },
+  { id: "podate", label: "PO date", width: 80, min: 76, sortKey: "po_date" },
+  { id: "product", label: "Product", width: 240, min: 160 },
+  { id: "kind", label: "Kind", width: 120, min: 100 },
+  { id: "qty", label: "Qty", width: 100, min: 84, kind: QTY_KIND.individual },
+  { id: "owed", label: "Owed / left", width: 110, min: 90 },
+  { id: "step", label: "Step", width: "1fr", min: 220 },
+  { id: "waiting", label: "Waiting", width: 70, min: 60, sortKey: "waiting" },
+  { id: "do", label: "Do", width: 180, min: 150 },
 ];
 export const CLAIMS_COL_WIDTHS_KEY = "claims-col-widths";
-/** The fixed columns plus the gaps (the mockup's `.row` / `.hd`): 1,176 px, leaving the Step column ≥ 56 px at 1280 and ≥ 216 px at 1440 (page padding 24). */
-export const CLAIMS_TABLE_WIDTH = CLAIM_COLUMNS.reduce((t, c) => t + (c.width === "1fr" ? 0 : c.width), 0) + (CLAIM_COLUMNS.length - 1) * 12;
-/** The grid template: the saved widths over the defaults; Step is always the rest. */
-export const claimsGrid = (widths: Record<string, number> = {}): string => CLAIM_COLUMNS.map((c) => (c.width === "1fr" ? "minmax(0, 1fr)" : `${widths[c.id] ?? c.width}px`)).join(" ");
+export const CLAIMS_GAP = 12;
+export const STEP_MIN = CLAIM_COLUMNS.find((c) => c.id === "step")!.min;
+/** The fixed columns plus the gaps (the mockup's `.row` / `.hd`): 1,176 px — at 1280 (page padding 24) that leaves Step 56 px, so the fit shrinks the defaults to give Step its 220. */
+export const CLAIMS_TABLE_WIDTH = CLAIM_COLUMNS.reduce((t, c) => t + (c.width === "1fr" ? 0 : c.width), 0) + (CLAIM_COLUMNS.length - 1) * CLAIMS_GAP;
+/** The grid template: the given widths over the defaults; Step is minmax(220px, 1fr) unless a width is given for it. */
+export const claimsGrid = (widths: Record<string, number> = {}): string => CLAIM_COLUMNS.map((c) => (widths[c.id] != null ? `${widths[c.id]}px` : c.width === "1fr" ? `minmax(${c.min}px, 1fr)` : `${c.width}px`)).join(" ");
 export const CLAIMS_GRID = claimsGrid();
-/** Which columns carry a resize handle: every fixed-width one but the checkbox. */
-export const resizableClaimColumn = (c: { id: string; width: number | "1fr" }) => c.width !== "1fr" && c.id !== "chk";
+/** Every column carries a resize handle (Maria 2026-11-18; the checkbox and Step included). */
+export const resizableClaimColumn = (_c: { id: string; width: number | "1fr" }) => true;
+/** The narrowest a column may be dragged. */
+export const claimColumnMin = (id: string): number => CLAIM_COLUMNS.find((c) => c.id === id)?.min ?? 50;
+/** Which default widths give way, in order, when the box is narrower than the defaults + Step's minimum. */
+export const CLAIMS_SHRINK_ORDER: readonly string[] = ["product", "supplier", "do", "kind", "owed", "qty", "podate", "waiting"];
+/**
+ * The widths for a box whose tracks have `inner` px (the box's content width less the header's 24 px padding):
+ * a dragged width (`saved`, clamped to its minimum) is kept as is; the other columns start at their defaults; Step starts at its
+ * dragged width or 220. Spare room goes to Step. A shortfall is taken from the undragged defaults in CLAIMS_SHRINK_ORDER, each
+ * down to its minimum; what is still short is `overflow` — the table is wider than the box and scrolls inside it.
+ */
+export function fitClaimWidths(inner: number, saved: Record<string, number> = {}): { widths: Record<string, number>; total: number; overflow: boolean } {
+  const widths: Record<string, number> = {};
+  for (const c of CLAIM_COLUMNS) widths[c.id] = saved[c.id] != null ? Math.max(c.min, saved[c.id]) : c.width === "1fr" ? c.min : c.width;
+  const total = () => CLAIM_COLUMNS.reduce((t, c) => t + widths[c.id], 0) + (CLAIM_COLUMNS.length - 1) * CLAIMS_GAP;
+  let spare = inner - total();
+  if (spare >= 0) { widths.step += spare; return { widths, total: total(), overflow: false }; }
+  for (const id of CLAIMS_SHRINK_ORDER) {
+    if (spare >= 0) break;
+    if (saved[id] != null) continue; // a dragged width never gives way
+    const c = CLAIM_COLUMNS.find((x) => x.id === id)!;
+    const give = Math.min(widths[id] - c.min, -spare);
+    widths[id] -= give; spare += give;
+  }
+  return { widths, total: total(), overflow: spare < 0 };
+}
 
 const CHANNELS = ["email", "chat", "phone", "form", "other"];
 const fieldRow = { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } as const;
@@ -417,7 +447,19 @@ function ClaimsList() {
   }, [data, s.q, s.kind, s.from, s.to, s.woFrom, s.woTo]);
   const needsAttention = s.bucket.length === 1 && s.bucket[0] === "needs_attention";
   const groups = useMemo(() => (needsAttention ? groupNeedsAttention(rows) : []), [rows, needsAttention]);
-  const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(CLAIMS_COL_WIDTHS_KEY);
+  const { colWidths, handleResizeStart, resetWidths } = useColumnWidths(CLAIMS_COL_WIDTHS_KEY, claimColumnMin);
+  // the box's width → the fit (Step ≥ 220 takes the spare room; the defaults give way; a wider table scrolls inside the box)
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [boxWidth, setBoxWidth] = useState<number>(() => window.innerWidth);
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    const measure = () => setBoxWidth(el.clientWidth);
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el); window.addEventListener("resize", measure);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
+  const fit = useMemo(() => fitClaimWidths(boxWidth - 48, colWidths), [boxWidth, colWidths]); // the box's 12 px padding and the header's 12 px, each side
 
   return (
     <div className="cl" style={{ display: "flex", flexDirection: "column" }} data-testid="claims-page">
@@ -442,7 +484,8 @@ function ClaimsList() {
         {Object.keys(colWidths).length > 0 && <button type="button" className="lnk mut" style={{ marginLeft: 12, paddingBottom: 10 }} onClick={resetWidths} data-testid="button-claims-reset-widths">Reset widths</button>}
       </div>
 
-      <div style={{ padding: "4px 12px 24px", "--claims-grid": claimsGrid(colWidths) } as React.CSSProperties}>
+      <div ref={boxRef} className="box" style={{ padding: "4px 12px 24px", overflowX: "auto", "--claims-grid": claimsGrid(fit.widths) } as React.CSSProperties} data-testid="claims-box" data-overflow={fit.overflow ? "1" : undefined}>
+       <div style={{ minWidth: fit.total + 24 }}>
         {error && <div style={{ color: "#c97b6a", padding: 12 }} data-testid="text-claims-error">{error}</div>}
         {!data && !error && <div className="mut" style={{ padding: 12 }}>Loading…</div>}
         {data && (
@@ -469,6 +512,7 @@ function ClaimsList() {
           </div>)}
         {data && !needsAttention && <ClaimRows rows={rows} q={s.q} onRow={(c) => navigate(`/claims/${c.id}`)} refresh={() => void load()} onRefund={setRefundFor} />}
         {data && needsAttention && <div className="mut" style={{ padding: "18px 12px 0", maxWidth: 900 }} data-testid="claims-emails-note">A matched refund email never shows here: it moves the claim straight to Waiting on refund to post. Every supplier reply does show here until you have read it. Feedback requests and "your case is resolved" notices on a closed claim are attached quietly.</div>}
+       </div>
       </div>
 
       {refundFor && (
