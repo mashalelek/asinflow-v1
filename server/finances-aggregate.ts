@@ -141,7 +141,7 @@ export async function rebuildFinancesDaily(from: string, to: string, opts: { liv
       UNION ALL SELECT day, asin, 'fba_fee', SUM(fba), SUM(units), SUM(fba_est), SUM(est_units), 0, 0 FROM per_line GROUP BY day, asin
       UNION ALL SELECT day, asin, 'referral_fee', SUM(referral), SUM(units), SUM(ref_est), SUM(est_units), 0, 0 FROM per_line GROUP BY day, asin
       UNION ALL SELECT day, asin, 'vcf', SUM(vcf), 0, 0, 0, 0, 0 FROM per_line WHERE vcf <> 0 GROUP BY day, asin
-      UNION ALL SELECT day, asin, 'fee:other', SUM(other), 0, 0, 0, 0, 0 FROM per_line WHERE other <> 0 GROUP BY day, asin
+      UNION ALL SELECT day, asin, 'fee:Other Amazon fees on orders', SUM(other), 0, 0, 0, 0, 0 FROM per_line WHERE other <> 0 GROUP BY day, asin
       UNION ALL SELECT day, asin, 'cogs', -SUM(units * COALESCE(cost_per_unit, 0)), SUM(units) FILTER (WHERE cost_per_unit IS NOT NULL), 0, 0, 0, 0 FROM per_line GROUP BY day, asin
       UNION ALL SELECT day, asin, 'cogs_missing', 0, SUM(units), 0, 0, 0, 0 FROM per_line WHERE cost_per_unit IS NULL GROUP BY day, asin
       UNION ALL SELECT day, asin, 'prep', 0, SUM(units), 0, 0,
