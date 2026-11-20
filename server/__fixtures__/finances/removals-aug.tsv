@@ -1,0 +1,5 @@
+request-date	order-id	order-source	order-type	order-status	last-updated-date	sku	fnsku	disposition	requested-quantity	cancelled-quantity	disposed-quantity	shipped-quantity	in-process-quantity	removal-fee	currency
+2026-09-29T15:18:58-07:00	2609291EVC	Seller-initiated Manual Removal	Return	Completed	2026-10-01T05:47:51-07:00	KIS-BPC-HFF-LCT-001	X0056QL01R	Sellable	1	0		1	0	0.84	USD
+2026-09-28T14:48:56-07:00	2609281DH2	Seller-initiated Manual Removal	Disposal	Completed	2026-10-05T19:35:01-07:00	GW-0UEW-1EZW	X0052EKQ7R	Sellable	1	0	1		0	1.53	USD
+2026-08-21T14:45:26-07:00	2608211DBH	Seller-initiated Manual Removal	Disposal	Completed	2026-08-28T19:16:16-07:00	61-6ERA-X148	X0051E1XTX	Sellable	1	0	1		0	0.84	USD
+2026-08-08T13:55:05-07:00	2608081AZJ	Seller-initiated Manual Removal	Liquidations	Completed	2026-08-13T08:14:10-07:00	61-6ERA-X148	X0051E1XTX	Sellable	1	0		1	0	0.00	USD
