@@ -763,7 +763,7 @@ export function ResultsTable({
   const [actualsFor, setActualsFor] = useState<AsinResult | null>(null);
   const openActuals = useCallback((r: AsinResult) => setActualsFor(r), []);
   const actualsPanel = actualsFor && actualsRange
-    ? <FinancesBreakdownPanel title={`${actualsFor.asin}${actualsFor.catalogData?.title ? ` · ${actualsFor.catalogData.title.slice(0, 48)}` : ""}`} subtitle={dateRangeLabel ?? `${actualsRange.from} – ${actualsRange.to}`} from={actualsRange.from} to={actualsRange.to} asin={actualsFor.asin} onClose={() => setActualsFor(null)} />
+    ? <FinancesBreakdownPanel title={`${actualsFor.asin}${actualsFor.catalogData?.title ? ` · ${actualsFor.catalogData.title}` : ""}`} subtitle={dateRangeLabel ?? `${actualsRange.from} – ${actualsRange.to}`} from={actualsRange.from} to={actualsRange.to} asin={actualsFor.asin} onClose={() => setActualsFor(null)} />
     : null;
   return (
     <>
