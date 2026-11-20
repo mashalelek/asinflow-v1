@@ -43,6 +43,7 @@ import { documentBaseName, noInvoiceTitle } from "@shared/po-documents";
 import { readSaveFailures } from "./po-documents";
 import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
+import { settingsFromRows, settingsToRows } from "@shared/settings-keys";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { setAsinPack, confirmPackSuggestions, parseUploadPack } from "./asin-pack-review";
 import { CaptureSchema, clipCapture, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill, supplierForHost } from "./po-prefill";
@@ -1285,6 +1286,37 @@ export async function registerRoutes(
     } catch (err: any) {
       log(`Settings fetch error: ${err.message}`, "api");
       res.status(500).json({ message: "Failed to fetch settings. Is DATABASE_URL configured?" });
+    }
+  });
+
+  // Profit settings, typed (Finances API patch commit 1, SPEC §5): the ONE
+  // store every page reads and the Settings dialog writes; the browser copy
+  // is gone. GET → the typed Settings; PUT (a partial is fine) → upsert the
+  // rows through the shared key map and answer the stored Settings.
+  app.get("/api/settings/profit", async (_req: Request, res: Response) => {
+    try {
+      const result = await pool.query("SELECT key, value FROM settings");
+      res.json(settingsFromRows(result.rows));
+    } catch (err: any) {
+      log(`Settings fetch error: ${err.message}`, "api");
+      res.status(500).json({ message: "Failed to fetch settings" });
+    }
+  });
+  app.put("/api/settings/profit", async (req: Request, res: Response) => {
+    try {
+      const rows = settingsToRows((req.body ?? {}) as Record<string, unknown>);
+      if (rows.length === 0) { res.status(400).json({ message: "No settings field in the body" }); return; }
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const r of rows) await client.query(`INSERT INTO settings (key, value, updated_at) VALUES ($1, to_jsonb($2::numeric), NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [r.key, r.value]);
+        await client.query("COMMIT");
+      } catch (e) { await client.query("ROLLBACK").catch(() => {}); throw e; } finally { client.release(); }
+      const result = await pool.query("SELECT key, value FROM settings");
+      res.json(settingsFromRows(result.rows));
+    } catch (err: any) {
+      log(`Settings save error: ${err.message}`, "api");
+      res.status(500).json({ message: "Failed to save settings" });
     }
   });
 

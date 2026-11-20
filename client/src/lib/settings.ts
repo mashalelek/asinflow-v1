@@ -1,6 +1,15 @@
 import { type Settings } from "@shared/schema";
 
-const SETTINGS_KEY = "fba-analyzer-settings";
+// Profit settings live in the database since the Finances API patch
+// (commit 1, SPEC §5): GET / PUT /api/settings/profit. The browser copy under
+// "fba-analyzer-settings" is removed on first load — a value Maria saves
+// shows in every browser. `loadSettings()` stays synchronous (the pages'
+// useState initialiser): the module cache after the first fetch, the
+// defaults before it; `useProfitSettings` (client/src/hooks/use-settings.ts)
+// does the fetch.
+const LEGACY_SETTINGS_KEY = "fba-analyzer-settings";
+let cached: Settings | null = null;
+const listeners = new Set<(s: Settings) => void>();
 
 export const defaultSettings: Settings = {
   inboundShippingCost: 0.5,
@@ -17,18 +26,38 @@ export const defaultSettings: Settings = {
   maxCogsMinProfitUnit: 3,
 };
 
+/** The settings as last fetched (defaults before the first fetch). Synchronous on purpose. */
 export function loadSettings(): Settings {
-  try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    if (stored) {
-      return { ...defaultSettings, ...JSON.parse(stored) };
-    }
-  } catch {}
-  return { ...defaultSettings };
+  try { localStorage.removeItem(LEGACY_SETTINGS_KEY); } catch {}
+  return cached ? { ...cached } : { ...defaultSettings };
 }
 
-export function saveSettings(settings: Settings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+/** Test seam / cache reset. */
+export function primeSettingsCache(s: Settings | null): void { cached = s; }
+
+export function subscribeSettings(fn: (s: Settings) => void): () => void { listeners.add(fn); return () => { listeners.delete(fn); }; }
+function publish(s: Settings) { cached = { ...s }; listeners.forEach((fn) => fn({ ...s })); }
+
+/** GET /api/settings/profit → the cache; the defaults when the request fails (the page still renders). */
+export async function fetchSettings(): Promise<Settings> {
+  try {
+    const res = await fetch("/api/settings/profit");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const s = { ...defaultSettings, ...(await res.json()) } as Settings;
+    publish(s);
+    return { ...s };
+  } catch {
+    return loadSettings();
+  }
+}
+
+/** PUT /api/settings/profit — the server's answer (the stored values) becomes the cache; throws on failure so the dialog can say so. */
+export async function saveSettings(settings: Settings): Promise<Settings> {
+  const res = await fetch("/api/settings/profit", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || `HTTP ${res.status}`); }
+  const s = { ...defaultSettings, ...(await res.json()) } as Settings;
+  publish(s);
+  return { ...s };
 }
 
 // Include Inbound Shipping in profit (2026-09-09): ONE key for every page —

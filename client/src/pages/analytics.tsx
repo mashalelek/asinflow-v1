@@ -8,7 +8,8 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { ResultsTable, getRowValue } from "@/components/results-table";
 import { GroupedTable, type GroupData } from "@/components/grouped-table";
 import { ColumnManager } from "@/components/column-manager";
-import { loadSettings, loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
+import { loadIncludeInbound, saveIncludeInbound } from "@/lib/settings";
+import { useProfitSettings } from "@/hooks/use-settings";
 import { loadColumnConfig, readKeepaPrefs, DEFAULT_KEEPA_PREFS, type ColumnConfig } from "@/lib/columns";
 import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
 import { Sun, Moon, BarChart3, Search, X, Filter } from "lucide-react";
@@ -103,7 +104,7 @@ function loadColFilters(): FilterMap {
 
 export default function Analytics() {
   const { toast } = useToast();
-  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [settings, setSettings] = useProfitSettings();
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColConfig);
   const [results, setResults] = useState<AsinResult[]>([]);
   const [priceSource, setPriceSource] = useState<PriceSource>("lowestFba");

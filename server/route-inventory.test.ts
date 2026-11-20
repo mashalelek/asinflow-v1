@@ -29,6 +29,8 @@ const EXPECTED_ROUTES = [
   "GET /api/bulk-lists/:id",
   "GET /api/bulk-lists/:id/refresh/status",
   "GET /api/credentials-status",
+  "GET /api/settings/profit",
+  "PUT /api/settings/profit",
   "GET /api/download-template",
   "GET /api/export/velocity-upload",
   "GET /api/pos",

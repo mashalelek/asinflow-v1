@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Settings as SettingsIcon, Save, Users } from "lucide-react";
 import { type Settings, type PriceSource } from "@shared/schema";
-import { loadSettings, saveSettings } from "@/lib/settings";
+import { fetchSettings, loadSettings, saveSettings } from "@/lib/settings";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
 import { UsersAdminDialog } from "@/components/users-admin-dialog";
@@ -83,15 +83,23 @@ export function SettingsDialog({
   // toolbar clock is the only one. Since 2026-11-05 Settings shows the red
   // "N steps failed in the last pass" too (LastPassBanner).
 
+  // The database's values each time the dialog opens (commit 1: no localStorage copy).
   useEffect(() => {
-    setSettings(loadSettings());
+    if (!open) return;
+    let alive = true;
+    void fetchSettings().then((s) => { if (alive) setSettings(s); });
+    return () => { alive = false; };
   }, [open]);
 
-  const handleSave = () => {
-    saveSettings(settings);
-    onSettingsChange(settings);
-    toast({ title: "Settings saved", description: "Your settings have been updated." });
-    setOpen(false);
+  const handleSave = async () => {
+    try {
+      const saved = await saveSettings(settings);
+      onSettingsChange(saved);
+      toast({ title: "Settings saved", description: "Saved for every browser." });
+      setOpen(false);
+    } catch (e: any) {
+      toast({ title: "Settings not saved", description: e?.message ?? String(e), variant: "destructive" });
+    }
   };
 
   const updateField = (field: keyof Settings, value: string) => {
@@ -266,7 +274,7 @@ export function SettingsDialog({
             </div>
           )}
 
-          <Button onClick={handleSave} className="w-full" data-testid="button-save-settings">
+          <Button onClick={() => void handleSave()} className="w-full" data-testid="button-save-settings">
             <Save className="h-4 w-4 mr-2" />
             Save Settings
           </Button>

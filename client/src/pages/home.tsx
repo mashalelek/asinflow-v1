@@ -21,7 +21,8 @@ import { ResultsTable, getRowValue, isSubmissionPending } from "@/components/res
 import { ExportButtons } from "@/components/export-buttons";
 import { SummaryCards, type FilterMode } from "@/components/summary-cards";
 import { ColumnManager } from "@/components/column-manager";
-import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
+import { loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
+import { useProfitSettings } from "@/hooks/use-settings";
 import { useSearch } from "wouter";
 import { loadColumnConfig, saveColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
@@ -335,7 +336,7 @@ type ScExportRecord = {
 
 export default function Home() {
   const { toast } = useToast();
-  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [settings, setSettings] = useProfitSettings();
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(loadColumnConfig);
   // Keepa trend columns (2026-11-18): the Trend range switch and the header toggles, stored with the column config.
   const keepa = useKeepaPrefs(columnConfig, (next) => { saveColumnConfig(next); setColumnConfig(next); });

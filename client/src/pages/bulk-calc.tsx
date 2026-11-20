@@ -42,7 +42,8 @@ import {
   type Settings, type PriceSource } from "@shared/schema";
 import { loadColumnConfig, saveColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { KeepaRangeSwitch, useKeepaPrefs, clearKeepaTrendsCache } from "@/components/keepa-trends";
-import { loadSettings, loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
+import { loadIncludeInbound, saveIncludeInbound, loadPriceSource, savePriceSource } from "@/lib/settings";
+import { useProfitSettings } from "@/hooks/use-settings";
 import { loadShowGated, saveShowGated, loadShowMeltable, saveShowMeltable, loadShowParked, loadShowDead } from "@/components/visibility-toggles";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { planBulkSetToggle, bulkToggleLabel, promoteTargets, applyBulkPlan, type BulkSetPlan } from "@/lib/bulk-buy-hold";
@@ -172,7 +173,7 @@ export default function BulkCalc() {
   );
   // Keepa trend columns (2026-11-18): Bulk Calc keeps its own prefs, under its own key.
   const keepa = useKeepaPrefs(columnConfig, (next) => { saveColumnConfig(next, BULK_COLUMNS_KEY); setColumnConfig(next); });
-  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [settings, setSettings] = useProfitSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   // §21 settings-drift fix (2026-09-09): SAME key as the ASINs page
   // (fba-include-inbound) — this page silently hard-defaulted to true.

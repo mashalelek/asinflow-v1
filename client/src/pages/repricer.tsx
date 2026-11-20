@@ -8,7 +8,8 @@ import { matchesFilters, type ColFilter, type FilterMap } from "@/components/col
 import { Button } from "@/components/ui/button";
 import { loadColumnConfig, saveColumnConfig, type ColumnConfig } from "@/lib/columns";
 import { KeepaRangeSwitch, useKeepaPrefs } from "@/components/keepa-trends";
-import { loadSettings, loadIncludeInbound, loadPriceSource } from "@/lib/settings";
+import { loadIncludeInbound, loadPriceSource } from "@/lib/settings";
+import { useProfitSettings } from "@/hooks/use-settings";
 import { loadBuyList, saveBuyList, loadOnHoldList, saveOnHoldList } from "@/lib/buy-hold";
 import { ALL_COLUMNS, type AsinResult, type ColumnId, type PriceSource, type Settings } from "@shared/schema";
 
@@ -97,7 +98,7 @@ export default function Repricer() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [settings] = useState<Settings>(loadSettings);
+  const [settings] = useProfitSettings();
   const [includeInboundShipping] = useState(loadIncludeInbound);
   const [priceSource] = useState<PriceSource>(loadPriceSource);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(
