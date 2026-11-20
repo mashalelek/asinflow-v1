@@ -9,7 +9,8 @@
 // and the `cogs_missing` units. Prep is never stored as money: the aggregate
 // keeps the units that take the Settings prep (Velocity PO in force) in
 // prep_units / prep_hazmat_units and readBreakdown applies the current
-// Settings values (§5 "Computed when viewed").
+// Settings values (§5 "Computed when viewed"; a hazmat unit takes the prep
+// cost + both DG/Hazmat surcharges).
 import pool, { query as defaultQuery } from "./db";
 import { log } from "./log";
 import { LIVE_QTY_CTE_SQL, LIVE_REFUND_TX_SQL, LIVE_SHIPMENT_TX_SQL } from "./finances-sql";
@@ -283,8 +284,10 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const pct = (ratio: number) => Math.round(ratio * 10000) / 100;
 
 /** Pure: aggregate rows for a range (+ the Settings prep values) → the breakdown of §1 / §6. */
-export function breakdownFromRows(rows: AggRow[], settings: Pick<Settings, "prepCost" | "hazmatPrepSurcharge">, meta: { from: string; to: string; asin: string | null; dataFrom: string | null }): FinancesBreakdown {
-  const P = settings.prepCost ?? 0, H = (settings.prepCost ?? 0) + (settings.hazmatPrepSurcharge ?? 0);
+export function breakdownFromRows(rows: AggRow[], settings: Pick<Settings, "prepCost" | "hazmatPrepSurcharge" | "hazmatShipSurcharge">, meta: { from: string; to: string; asin: string | null; dataFrom: string | null }): FinancesBreakdown {
+  // Prep per unit (SPEC patch §5, Maria 2026-11-20): a Velocity PO's unit takes the Prep cost; a hazmat ASIN on a Velocity PO the
+  // Prep cost + the DG/Hazmat prep surcharge + the DG/Hazmat shipping surcharge (1.20 + 0 + 1.00 today); a Home PO's unit $0.
+  const P = settings.prepCost ?? 0, H = (settings.prepCost ?? 0) + (settings.hazmatPrepSurcharge ?? 0) + (settings.hazmatShipSurcharge ?? 0);
   const prepOf = (r: AggRow) => r.prep_units * P + r.prep_hazmat_units * H;
   const by = new Map(rows.map((r) => [r.line, r]));
   const amt = (line: string) => by.get(line)?.amount ?? 0;

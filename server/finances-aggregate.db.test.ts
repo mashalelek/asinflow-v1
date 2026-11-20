@@ -59,7 +59,7 @@ describe("rebuildFinancesDaily + readBreakdown (real schema, rolled back)", () =
     try {
       const aid = await seed(q);
       await rebuildFinancesDaily("2031-08-01", "2031-08-31", { live: false, q, log: () => {} });
-      const S = { prepCost: 1.2, hazmatPrepSurcharge: 1 } as any;
+      const S = { prepCost: 1.2, hazmatPrepSurcharge: 0, hazmatShipSurcharge: 1 } as any; // acceptance rows 11–13 (Maria's values 2026-11-20)
       const b = await readBreakdown("2031-08-01", "2031-08-31", A, q, S);
       const l = (k: string) => b.lines.find((x) => x.line === k)?.amount;
       // Sales: o1 row 40 − 2 = 38; o2 no row, no price → last posted unit price 20 → 20. Units 3 (cancelled o3 out).
@@ -89,7 +89,7 @@ describe("rebuildFinancesDaily + readBreakdown (real schema, rolled back)", () =
       expect(acct.totals.orders).toBe(3);
       const acctRows = (await q(`SELECT asin, SUM(amount)::float8 AS a FROM finances_daily WHERE line = 'svc:FBAStorageBilling' AND day BETWEEN '2031-08-01' AND '2031-08-31' GROUP BY asin ORDER BY asin`)).rows;
       expect(acctRows.map((r: any) => [r.asin, Math.round(r.a * 100) / 100])).toEqual([["", -49.75], ["B0OTHER000", -0.47], [A, -1.25]]); // Σ = −51.47, the row
-      // A2: hazmat Velocity → prep 3 × (1.20 + 1.00).
+      // A2 (acceptance row 13): hazmat ASIN on a Velocity PO → prep 3 × (1.20 + 0 hazmat prep surcharge + 1.00 hazmat shipping surcharge).
       const b2 = await readBreakdown("2031-08-01", "2031-08-31", A2, q, S);
       expect(b2.lines.find((x) => x.line === "prep")!.amount).toBe(-6.6); expect(b2.lines.find((x) => x.line === "svc:FBAPostInboundTransportation")!.amount).toBe(-5);
       // sales_daily refund columns follow the aggregate.

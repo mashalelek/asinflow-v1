@@ -84,7 +84,7 @@ error carries Amazon's reason document; a rerun of the window fixes it.
 | Reimbursements (6 lines) | +763.04 | +763.04 | 0.00 |
 | Amazon fees total | −11,912.24 | −11,909.55 | +2.69 |
 | COGS | (in 17,319.08) | −16,210.44 | |
-| Prep | (in 17,319.08) | −1,376.00 | |
+| Prep | (in 17,319.08) | −1,376.00 | Settings rule: 1,232 units; Velocity non-hazmat × 1.20, Velocity hazmat × (1.20 + 0 hazmat prep surcharge + 1.00 hazmat shipping surcharge) = 2.20, Home × 0. Re-read 2026-11-20 after Maria's settings landed (migration 122 amended): unchanged, the hazmat unit was 2.20 under both seeds |
 | Disposal of sellable products | −10.66 | −10.66 | 0.00 |
 | Lost/damaged by Amazon | −189.18 | −195.03 | −5.85 (prep) |
 | Estimated payout | 21,000.67 | 21,003.36 | +2.69 |
@@ -123,6 +123,38 @@ fees on orders" appears only when a shipment carried a fee type outside
 Commission / FBA / VCF (none in August). The quantity label stays "Orders /
 ASIN units" where the mockup wrote "Orders / Units" (the quantity-names rule
 wins, as on the claims pages).
+
+## Settings: before and after (migration 122 amended with Maria's values, 2026-11-20)
+
+The display options (price source, show gated / meltable / parked / dead)
+are per-browser toggles in localStorage (`fba-price-source`, the view
+toggles on each page), not settings rows — left where they are. Acceptance
+row 13's rule is now prep + the DG/Hazmat prep surcharge + the DG/Hazmat
+shipping surcharge (1.20 + 0 + 1.00); rows 11–12 unchanged.
+
+| Key | Local before (first seed) | Production today (`--prod`, read-only) | After migration 122 (local now; production at deploy) |
+|---|---:|---:|---:|
+| prep_cost | 1.2 | 1 | 1.2 |
+| additional_fees | 0 | 0 | 0 |
+| low_inventory_surcharge | 0.26 | 0.26 | 0.26 |
+| hazmat_ship_surcharge | 0 | 0 | 1 |
+| hazmat_prep_surcharge | 1 (wrong seed) | 0 | 0 |
+| inbound_shipping_per_lb | 0.50 | 0.5 | 0.8 |
+| include_inbound_shipping | true | true | true |
+| min_margin | 10 | 10 | 12 |
+| min_roi | 15 | 15 | 18 |
+| min_profit_unit | 3 | (no row) | 2 |
+| max_cogs_min_margin_pct | 12 | (no row) | 12 |
+| max_cogs_min_roi_pct | 20 | (no row) | 18 |
+| max_cogs_min_profit_unit | 3 | (no row) | 2 |
+
+## Production results
+
+Not run yet (2026-11-20 evening): production is on `1696c06` — the patch is
+not pushed, migrations 122–124 are not applied there and no Finances table
+exists, so `backfill:finances` cannot have run and no 00:00 pass has run
+components 19–21 for real. The section below is filled in once the deploy
+and the backfill are done.
 
 ## Open items for Maria
 

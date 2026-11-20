@@ -1054,8 +1054,9 @@ global defaults:
 Settings values are read by the calculation engine and apply to all Estimated
 metrics across the app — and, since the Finances API patch (2026-11-20), to
 the Actual Prep line (§11 "Finances"): a unit sold from a Velocity PO takes
-the Prep cost, a hazmat ASIN the Prep cost + the DG/Hazmat prep surcharge, a
-Home PO $0.
+the Prep cost, a hazmat ASIN the Prep cost + the DG/Hazmat prep surcharge +
+the DG/Hazmat shipping surcharge (1.20 + 0 + 1.00 on 2026-11-20), a Home PO
+$0.
 
 **Stored in the database (Finances patch commit 1, migration 122).** Every
 field of the profit Settings is a `settings` row (`shared/settings-keys.ts`

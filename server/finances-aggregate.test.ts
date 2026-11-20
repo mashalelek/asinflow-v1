@@ -3,10 +3,10 @@ import { describe, it, expect } from "vitest";
 import { breakdownFromRows, type AggRow } from "./finances-aggregate";
 
 const row = (line: string, amount = 0, quantity = 0, extra: Partial<AggRow> = {}): AggRow => ({ line, amount, quantity, est_amount: 0, est_units: 0, prep_units: 0, prep_hazmat_units: 0, ...extra });
-const S = { prepCost: 1.2, hazmatPrepSurcharge: 1 };
+const S = { prepCost: 1.2, hazmatPrepSurcharge: 0, hazmatShipSurcharge: 1 }; // Maria's values 2026-11-20: a hazmat Velocity unit = 1.20 + 0 + 1.00
 
 describe("breakdownFromRows", () => {
-  it("SB's identities: gross = sales + refund cost + fees + cost of goods; payout leaves the returned-items value out; prep from the Settings values", () => {
+  it("SB's identities: gross = sales + refund cost + fees + cost of goods; payout leaves the returned-items value out; prep from the Settings values (hazmat = prep + both DG/Hazmat surcharges)", () => {
     const rows = [
       row("sales", 1000), row("units", 0, 40), row("orders", 0, 38), row("refunds", 0, 2),
       row("refund_amount", -50), row("refund_commission", -2), row("refunded_referral", 7.5), row("returned_value", 20, 2, { prep_units: 2 }),
