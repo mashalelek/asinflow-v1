@@ -27,6 +27,7 @@ import axios from "axios";
 import { spApiGet, spApiPost } from "./spapi";
 import pool, { query } from "./db";
 import { log } from "./log";
+import { ORDER_SKU_FINANCES_SQL } from "./finances-sql";
 
 const MARKETPLACE_ID = "ATVPDKIKX0DER";
 /** Amazon's sales-day basis (D7). */
@@ -229,8 +230,13 @@ function fmtDate(d: Date): string {
   return d.toISOString().split("T")[0];
 }
 
-/** Parsed, non-cancelled order line. `date` is the Pacific day of the purchase. */
-interface OrderLine { orderId: string; asin: string; date: string; qty: number; price: number }
+/**
+ * Parsed order line. `date` is the Pacific day of the purchase; `price` the report's
+ * item-price (the line's gross principal) and `promo` its item-promotion-discount.
+ * `cancelled` = the order (order-status) or the line (item-status) is Cancelled —
+ * out of Sales / Units / Orders whenever it happens (Finances patch §3).
+ */
+export interface OrderLine { orderId: string; asin: string; sku: string; date: string; purchaseAt: string; status: string; cancelled: boolean; qty: number; price: number; promo: number; channel: string }
 
 async function fetchChunk(
   startDate: string,
@@ -300,10 +306,15 @@ async function fetchChunk(
     return { chunk: emptyChunk, dates: new Set<string>(), asins: new Set<string>() };
   }
 
-  // 4. Parse TSV
-  const parsed = parseOrdersReport(lines);
+  // 4. Parse TSV — every line, cancelled ones included: the per-order store keeps
+  // them (status Cancelled) so Sales / Units / Orders drop a late cancellation.
+  const allLines = parseOrdersReportAll(lines);
+  const parsed = allLines.filter((l) => !l.cancelled);
+  // An explicit selection writes (and clears) only its own ASINs' order lines.
+  const scopeAsins = scopeAsinIds ? Array.from(asinIdMap.keys()) : null;
+  const orderLineRows = allLines.filter((l) => l.orderId && l.sku && ASIN_RE.test(l.asin) && (!scopeAsins || asinIdMap.has(l.asin)));
   if (parsed.length === 0) {
-    await replaceWindow(startDate, endDate, scopeAsinIds, [], []);
+    await replaceWindow(startDate, endDate, scopeAsinIds, [], [], orderLineRows, scopeAsins);
     return { chunk: emptyChunk, dates: new Set<string>(), asins: new Set<string>() };
   }
 
@@ -326,6 +337,20 @@ async function fetchChunk(
     }
   }
 
+  // Sales per line (Finances patch §2): the order's own Finances row (principal −
+  // promotion, RELEASED or DEFERRED) for the units it covers, the report's price
+  // for the rest (a Pending order, an unshipped unit); never a day average.
+  const fin = await loadOrderSkuFinances(Array.from(new Set(parsed.map((l) => l.orderId).filter(Boolean))));
+  const needFallback = Array.from(new Set(parsed.filter((l) => l.price <= 0 && l.qty > 0 && !fin.has(`${l.orderId}|${l.sku}`) && ASIN_RE.test(l.asin)).map((l) => l.asin)));
+  const fallbackUnitPrice = await loadLastUnitPrice(needFallback);
+  const revenueOf = (l: OrderLine): number => {
+    const f = fin.get(`${l.orderId}|${l.sku}`);
+    const unit = l.price > 0 && l.qty > 0 ? l.price / l.qty : (fallbackUnitPrice.get(l.asin) ?? 0);
+    if (!f) return l.price > 0 ? l.price - l.promo : unit * l.qty;
+    const rest = Math.max(0, l.qty - f.quantity);
+    return f.principal + f.promo + rest * unit;
+  };
+
   // Aggregate per ASIN + Pacific day, and per (order id, ASIN) for sales_orders.
   const dailyMap = new Map<string, { asinId: string; asin: string; date: string; units: number; revenue: number }>();
   const orderMap = new Map<string, { orderId: string; asinId: string; date: string; units: number }>();
@@ -340,11 +365,12 @@ async function fetchChunk(
     if (!asinId) continue;
     const key = `${l.asin}|${l.date}`;
     const existing = dailyMap.get(key);
+    const revenue = revenueOf(l);
     if (existing) {
       existing.units += l.qty;
-      existing.revenue += l.price;
+      existing.revenue += revenue;
     } else {
-      dailyMap.set(key, { asinId, asin: l.asin, date: l.date, units: l.qty, revenue: l.price });
+      dailyMap.set(key, { asinId, asin: l.asin, date: l.date, units: l.qty, revenue });
     }
     if (l.orderId) {
       const ok = `${l.orderId}|${asinId}`;
@@ -358,9 +384,9 @@ async function fetchChunk(
   // now; the delete and the inserts commit together or not at all). Units and
   // revenue only; the refund / fee columns keep their first-insert 0 default
   // and are never in the SET list (components 20/21).
-  const dailyRows = Array.from(dailyMap.values());
+  const dailyRows = Array.from(dailyMap.values()).map((e) => ({ ...e, revenue: Math.round(e.revenue * 100) / 100 }));
   const orderRows = Array.from(orderMap.values());
-  await replaceWindow(startDate, endDate, scopeAsinIds, dailyRows, orderRows);
+  await replaceWindow(startDate, endDate, scopeAsinIds, dailyRows, orderRows, orderLineRows, scopeAsins);
   const dateSet = new Set<string>(dailyRows.map((e) => e.date));
   const asinSet = new Set<string>(dailyRows.map((e) => e.asin));
   const distinctOrders = new Set(orderRows.map((o) => o.orderId)).size;
@@ -382,12 +408,28 @@ async function replaceWindow(
   scopeAsinIds: string[] | null,
   dailyRows: ReadonlyArray<{ asinId: string; date: string; units: number; revenue: number }>,
   orderRows: ReadonlyArray<{ orderId: string; asinId: string; date: string; units: number }>,
+  /** Every order line of the window (cancelled included) for finances_order_lines; an explicit selection keeps the other ASINs' lines. */
+  orderLines: ReadonlyArray<OrderLine> = [],
+  scopeAsins: string[] | null = null,
 ): Promise<void> {
   await salesDb.transaction(async (q) => {
     const scope = scopeAsinIds ? ` AND asin_id = ANY($3::uuid[])` : "";
     const params = scopeAsinIds ? [startDate, endDate, scopeAsinIds] : [startDate, endDate];
     await q(`DELETE FROM sales_daily WHERE sale_date >= $1::date AND sale_date <= $2::date${scope}`, params);
     await q(`DELETE FROM sales_orders WHERE sale_date >= $1::date AND sale_date <= $2::date${scope}`, params);
+    if (orderLines.length > 0 || !scopeAsinIds) {
+      const lscope = scopeAsins ? ` AND asin = ANY($3::text[])` : "";
+      await q(`DELETE FROM finances_order_lines WHERE purchase_day >= $1::date AND purchase_day <= $2::date${lscope}`, scopeAsins ? [startDate, endDate, scopeAsins] : [startDate, endDate]);
+      for (const l of orderLines) {
+        await q(
+          `INSERT INTO finances_order_lines (order_id, sku, asin, purchase_at, purchase_day, order_status, units, item_price, item_promo, fulfillment_channel, synced_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+           ON CONFLICT (order_id, sku) DO UPDATE SET asin = EXCLUDED.asin, purchase_at = EXCLUDED.purchase_at, purchase_day = EXCLUDED.purchase_day, order_status = EXCLUDED.order_status,
+             units = EXCLUDED.units, item_price = EXCLUDED.item_price, item_promo = EXCLUDED.item_promo, fulfillment_channel = EXCLUDED.fulfillment_channel, synced_at = now()`,
+          [l.orderId, l.sku, l.asin, l.purchaseAt, l.date, l.cancelled ? "Cancelled" : (l.status || "Unknown"), l.qty, l.price > 0 ? l.price : null, l.promo || null, l.channel || null],
+        );
+      }
+    }
     for (const entry of dailyRows) {
       await q(
         `INSERT INTO sales_daily (asin_id, sale_date, units_sold, revenue, units_refunded, refund_amount)
@@ -412,32 +454,72 @@ async function replaceWindow(
   });
 }
 
+
+/** The live Finances figures per (order id, SKU) for these orders (server/finances-sql.ts); empty when the orders have no rows yet. */
+export async function loadOrderSkuFinances(orderIds: string[]): Promise<Map<string, { principal: number; promo: number; fbaFee: number; referralFee: number; vcf: number; otherFee: number; quantity: number; anyDeferred: boolean }>> {
+  const m = new Map<string, { principal: number; promo: number; fbaFee: number; referralFee: number; vcf: number; otherFee: number; quantity: number; anyDeferred: boolean }>();
+  if (orderIds.length === 0) return m;
+  const r = await query(ORDER_SKU_FINANCES_SQL, [orderIds]);
+  for (const row of r.rows ?? []) m.set(`${row.order_id}|${row.sku}`, { principal: Number(row.principal), promo: Number(row.promo), fbaFee: Number(row.fba_fee), referralFee: Number(row.referral_fee), vcf: Number(row.vcf), otherFee: Number(row.other_fee), quantity: Number(row.quantity), anyDeferred: !!row.any_deferred });
+  return m;
+}
+
+/** An ASIN's most recent per-unit principal on a live Finances shipment row — the price of a Pending line the report leaves blank. */
+export async function loadLastUnitPrice(asins: string[]): Promise<Map<string, number>> {
+  const m = new Map<string, number>();
+  if (asins.length === 0) return m;
+  const r = await query(
+    `SELECT DISTINCT ON (l.asin) l.asin, (SUM(l.amount) OVER (PARTITION BY l.transaction_id, l.sku) / NULLIF(l.quantity, 0))::float8 AS unit
+       FROM finances_lines l JOIN finances_transactions t ON t.transaction_id = l.transaction_id
+      WHERE l.line = 'sales' AND l.asin = ANY($1::text[]) AND l.quantity > 0 AND t.superseded_at IS NULL
+      ORDER BY l.asin, l.posted_at DESC`,
+    [asins],
+  );
+  for (const row of r.rows ?? []) if (row.unit != null) m.set(String(row.asin), Number(row.unit));
+  return m;
+}
+
 /** Pure: TSV lines (header first) → non-cancelled order lines, dated by the Pacific day. Exported for tests. */
 export function parseOrdersReport(lines: string[]): OrderLine[] {
+  return parseOrdersReportAll(lines).filter((l) => !l.cancelled);
+}
+
+/** Pure: every order line of the report, cancelled ones included (`cancelled` set) — the per-order store (finances_order_lines) keeps them so a late cancellation drops the line. */
+export function parseOrdersReportAll(lines: string[]): OrderLine[] {
   const headers = lines[0].replace(/\r$/, "").split("\t");
   const col = (name: string) => headers.indexOf(name);
   const iOrder = col("amazon-order-id");
   const iAsin = col("asin");
+  const iSku = col("sku");
   const iDate = col("purchase-date");
   const iStatus = col("order-status");
+  const iItemStatus = col("item-status");
   const iQty = col("quantity");
   const iPrice = col("item-price");
+  const iPromo = col("item-promotion-discount");
+  const iChannel = col("fulfillment-channel");
   if (iAsin < 0 || iDate < 0 || iQty < 0) {
     throw new Error(`Missing columns. Got: ${headers.join(", ")}`);
   }
   const out: OrderLine[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].replace(/\r$/, "").split("\t");
-    const orderStatus = iStatus >= 0 ? cols[iStatus] : "";
-    if (orderStatus === "Cancelled") continue;
+    const orderStatus = iStatus >= 0 ? (cols[iStatus] ?? "") : "";
+    const itemStatus = iItemStatus >= 0 ? (cols[iItemStatus] ?? "") : "";
     const asin = cols[iAsin];
     if (!asin) continue;
     out.push({
       orderId: iOrder >= 0 ? (cols[iOrder] ?? "").trim() : "",
       asin,
+      sku: iSku >= 0 ? (cols[iSku] ?? "").trim() : "",
       date: pacificDay(cols[iDate]),
+      purchaseAt: cols[iDate] ?? "",
+      status: orderStatus,
+      cancelled: orderStatus === "Cancelled" || itemStatus === "Cancelled",
       qty: parseInt(cols[iQty]) || 0,
       price: iPrice >= 0 ? parseFloat(cols[iPrice]) || 0 : 0,
+      promo: iPromo >= 0 ? Math.abs(parseFloat(cols[iPromo]) || 0) : 0,
+      channel: iChannel >= 0 ? (cols[iChannel] ?? "") : "",
     });
   }
   return out;

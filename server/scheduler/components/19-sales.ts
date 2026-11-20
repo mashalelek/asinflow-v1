@@ -5,7 +5,7 @@
 //
 // Window: `job.params.sales_window = {from, to}` (YYYY-MM-DD) when the job
 // carries one — the history backfill (POST /api/jobs/backfill-sales) — else
-// the last 48 hours, overlapping on purpose: each chunk deletes and reloads
+// the last 30 days (was 48 hours; Finances patch §3: a cancellation weeks later must drop out), overlapping on purpose: each chunk deletes and reloads
 // its window (Dashboard patch D7, 2026-11-03: Pacific days; the sync requests
 // Pacific day boundaries and clamps the end to now).
 //
@@ -20,7 +20,9 @@ import { enqueueOnboardingJob } from "../jobs-repo";
 import { ymdLocal } from "./shared";
 import { ComponentError, type ComponentDef, type ComponentContext, type ComponentResult } from "../types";
 
-export const SALES_WINDOW_HOURS = 48;
+/** Trailing re-read (Finances patch §3, 2026-11-20): 30 days, so an order Amazon cancels weeks after purchase drops out of its day; was 48 h. */
+export const SALES_WINDOW_DAYS = 30;
+export const SALES_WINDOW_HOURS = SALES_WINDOW_DAYS * 24;
 export const ONBOARD_SALES_ASINS = "onboardSalesAsins";
 
 /** Test seam: the sync function the component calls. */
@@ -51,7 +53,7 @@ export function salesResultToComponent(r: SalesSyncResult, window: { start: stri
     onboarded_from_sales: r.onboarded.length,
     invalid_asins_skipped: r.invalidAsins.length,
   };
-  if (window.source === "default") counts.window_hours = SALES_WINDOW_HOURS;
+  if (window.source === "default") counts.window_days = SALES_WINDOW_DAYS;
   const outcomes: Record<string, string> = {
     _window: `${window.start}..${window.end} (${window.source})`,
     _earliest_sale_date_returned: r.minDate ?? "none",

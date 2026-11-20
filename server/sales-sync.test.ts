@@ -34,6 +34,8 @@ let asinsTable: { id: string; asin: string }[] = [];
 const sql: { text: string; params?: any[] }[] = [];
 /** Test seam: make an INSERT fail (the fail-closed transaction test). */
 let failInsertFor: string | null = null;
+let financesRows: any[] = [];
+let lastUnitPrices: any[] = [];
 const mockQuery = vi.fn(async (text: string, params?: any[]) => {
   sql.push({ text, params });
   const t = text.replace(/\s+/g, " ").trim();
@@ -43,6 +45,10 @@ const mockQuery = vi.fn(async (text: string, params?: any[]) => {
   if (t.startsWith("DELETE FROM sales_daily") || t.startsWith("DELETE FROM sales_orders")) return { rows: [], rowCount: 0 };
   if (t.startsWith("INSERT INTO sales_daily")) { if (failInsertFor && params![0] === failInsertFor) throw new Error("boom: disk full"); return { rows: [], rowCount: 1 }; }
   if (t.startsWith("INSERT INTO sales_orders")) return { rows: [], rowCount: 1 };
+  // Finances patch (commit 3): the per-order store and the live Finances rows per (order, SKU).
+  if (t.startsWith("DELETE FROM finances_order_lines") || t.startsWith("INSERT INTO finances_order_lines")) return { rows: [], rowCount: 1 };
+  if (t.startsWith("WITH live AS")) return { rows: financesRows.filter((r) => params![0].includes(r.order_id)), rowCount: 0 };
+  if (t.startsWith("SELECT DISTINCT ON (l.asin) l.asin")) return { rows: lastUnitPrices, rowCount: 0 };
   throw new Error(`unexpected sql ${t.slice(0, 60)}`);
 });
 vi.mock("./db", () => ({
@@ -51,7 +57,7 @@ vi.mock("./db", () => ({
   default: { connect: async () => ({ query: (text: string, params?: any[]) => mockQuery(text, params), release: () => {} }) },
 }));
 
-import { syncSalesData, parseOrdersReport, buildDateChunks, salesTiming, salesDb, SalesSyncError, MAX_RANGE_DAYS, pacificDay, pacificToUtc, reportWindowUtc, tzOffsetMinutes } from "./sales-sync";
+import { syncSalesData, parseOrdersReport, parseOrdersReportAll, buildDateChunks, salesTiming, salesDb, SalesSyncError, MAX_RANGE_DAYS, pacificDay, pacificToUtc, reportWindowUtc, tzOffsetMinutes } from "./sales-sync";
 
 const HEADER = "amazon-order-id\tpurchase-date\torder-status\tasin\tquantity\titem-price";
 // 15:00 UTC = 08:00 Pacific (PDT) / 07:00 (PST): the Pacific day equals the date given.
@@ -63,13 +69,13 @@ beforeEach(() => {
   scripts = []; created = 0; posts.length = 0; sql.length = 0;
   asinsTable = [{ id: "id-A", asin: "A000000001" }, { id: "id-D", asin: "D00000DEAD" }];
   salesTiming.pollMs = 0; salesTiming.chunkDelayMs = 0; salesTiming.pollTimeoutMs = 5_000;
-  failInsertFor = null; salesDb.now = () => new Date("2026-11-03T12:00:00Z");
+  failInsertFor = null; financesRows = []; lastUnitPrices = []; salesDb.now = () => new Date("2026-11-03T12:00:00Z");
 });
 
 describe("parseOrdersReport / buildDateChunks", () => {
   it("drops cancelled lines, cuts the date to the day, parses qty and price", () => {
     const lines = report(row("2026-06-01", "A000000001", 2, 19.98), row("2026-06-01", "A000000001", 1, 9.99, "Cancelled"), row("2026-06-02", "B000000002", 1, 5)).split("\n").filter(Boolean);
-    expect(parseOrdersReport(lines)).toEqual([
+    expect(parseOrdersReport(lines).map(({ orderId, asin, date, qty, price }) => ({ orderId, asin, date, qty, price }))).toEqual([
       { orderId: "o-2026-06-01-A000000001", asin: "A000000001", date: "2026-06-01", qty: 2, price: 19.98 },
       { orderId: "o-2026-06-02-B000000002", asin: "B000000002", date: "2026-06-02", qty: 1, price: 5 },
     ]);
@@ -271,5 +277,39 @@ describe("delete + reload per chunk (fail-closed) and sales_orders", () => {
     const r = await syncSalesData("2024-09-01", "2024-09-30");
     expect(r.chunks[0]).toMatchObject({ status: "empty", orders: 0, minDate: null });
     expect(kinds()).toEqual([]);
+  });
+});
+
+// ── Finances patch, commit 3: per-order sales from Finances rows, cancellations kept in the per-order store ──
+describe("sales from the order's Finances row (SPEC §2), the per-order store", () => {
+  const H2 = "amazon-order-id\tpurchase-date\torder-status\titem-status\tfulfillment-channel\tsku\tasin\tquantity\titem-price\titem-promotion-discount";
+  const r2 = (o: string, status: string, itemStatus: string, sku: string, asin: string, qty: number, price: string, promo = "0") => `${o}\t2026-06-01T15:00:00+00:00\t${status}\t${itemStatus}\tAFN\t${sku}\t${asin}\t${qty}\t${price}\t${promo}`;
+  const rep = (...rows: string[]) => [H2, ...rows].join("\n") + "\n";
+  const ins = () => sql.filter((q) => q.text.includes("INSERT INTO sales_daily")).map((q) => q.params!);
+  const lines = () => sql.filter((q) => q.text.includes("INSERT INTO finances_order_lines")).map((q) => q.params!);
+  it("a line with a live Finances row takes principal + promotion for the shipped units and the report price for the rest; one without takes price − promotion", async () => {
+    financesRows = [{ order_id: "o1", sku: "SKU-A", principal: 20, promo: -1, fba_fee: -3, referral_fee: -2, vcf: 0, other_fee: 0, quantity: 1, any_deferred: false }];
+    scripts = [{ report: rep(r2("o1", "Shipped", "Shipped", "SKU-A", "A000000001", 2, "50.00"), r2("o2", "Pending", "Pending", "SKU-A", "A000000001", 1, "30.00", "2.00")) }];
+    await syncSalesData("2026-06-01", "2026-06-01");
+    expect(ins()).toEqual([["id-A", "2026-06-01", 3, 19 + 25 + 28]]);
+  });
+  it("a Pending line with no price and no Finances row is priced at the ASIN's last Finances unit price (never a day average)", async () => {
+    lastUnitPrices = [{ asin: "A000000001", unit: 25.96 }];
+    scripts = [{ report: rep(r2("o3", "Pending", "Pending", "SKU-A", "A000000001", 1, "")) }];
+    await syncSalesData("2026-06-01", "2026-06-01");
+    expect(ins()).toEqual([["id-A", "2026-06-01", 1, 25.96]]);
+  });
+  it("cancelled lines leave sales_daily but are stored in finances_order_lines as Cancelled (order-status or item-status)", async () => {
+    scripts = [{ report: rep(r2("o4", "Cancelled", "Cancelled", "SKU-A", "A000000001", 1, "10.00"), r2("o5", "Shipped", "Cancelled", "SKU-A", "A000000001", 1, "10.00"), r2("o6", "Shipped", "Shipped", "SKU-A", "A000000001", 1, "10.00")) }];
+    await syncSalesData("2026-06-01", "2026-06-01");
+    expect(ins()).toEqual([["id-A", "2026-06-01", 1, 10]]);
+    expect(lines().map((p) => [p[0], p[5], p[6]])).toEqual([["o4", "Cancelled", 1], ["o5", "Cancelled", 1], ["o6", "Shipped", 1]]);
+    expect(sql.some((q) => q.text.startsWith("DELETE FROM finances_order_lines"))).toBe(true);
+  });
+  it("parseOrdersReportAll keeps every line and marks the cancelled ones; parseOrdersReport drops them", () => {
+    const L = rep(r2("o4", "Cancelled", "Cancelled", "S", "A000000001", 1, "10"), r2("o6", "Shipped", "Shipped", "S", "A000000001", 1, "10")).split("\n").filter(Boolean);
+    expect(parseOrdersReportAll(L).map((l) => l.cancelled)).toEqual([true, false]);
+    expect(parseOrdersReport(L).length).toBe(1);
+    expect(parseOrdersReportAll(L)[1]).toMatchObject({ sku: "S", status: "Shipped", channel: "AFN", promo: 0, purchaseAt: "2026-06-01T15:00:00+00:00" });
   });
 });

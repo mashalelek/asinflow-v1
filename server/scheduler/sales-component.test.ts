@@ -5,7 +5,7 @@ import { join } from "path";
 vi.mock("../index", () => ({ log: () => {} }));
 vi.mock("../db", () => ({ query: vi.fn(async () => ({ rows: [], rowCount: 0 })), default: {} }));
 
-import { sales, salesDeps, salesWindowFor, salesResultToComponent, SALES_WINDOW_HOURS, ONBOARD_SALES_ASINS } from "./components/19-sales";
+import { sales, salesDeps, salesWindowFor, salesResultToComponent, SALES_WINDOW_DAYS, ONBOARD_SALES_ASINS } from "./components/19-sales";
 import { SalesSyncError, type SalesSyncResult } from "../sales-sync";
 import { ComponentError, type ComponentContext, type JobRow, type QueryLike } from "./types";
 import { parseBackfillWindow } from "./routes";
@@ -46,12 +46,12 @@ describe("salesWindowFor", () => {
   it("uses params.sales_window when valid", () => {
     expect(salesWindowFor({ sales_window: { from: "2024-05-01", to: "2026-10-16" } })).toEqual({ start: "2024-05-01", end: "2026-10-16", source: "params" });
   });
-  it("falls back to the trailing 48 hours otherwise", () => {
+  it("falls back to the trailing 30 days otherwise (Finances patch §3: cancellations weeks later)", () => {
     const now = new Date(2026, 9, 16, 12, 0, 0);
-    expect(salesWindowFor(null, now)).toEqual({ start: "2026-10-14", end: "2026-10-16", source: "default" });
+    expect(salesWindowFor(null, now)).toEqual({ start: "2026-09-16", end: "2026-10-16", source: "default" });
     expect(salesWindowFor({ sales_window: { from: "bad", to: "2026-10-16" } }, now).source).toBe("default");
     expect(salesWindowFor({ sales_window: { from: "2026-10-17", to: "2026-10-16" } }, now).source).toBe("default");
-    expect(SALES_WINDOW_HOURS).toBe(48);
+    expect(SALES_WINDOW_DAYS).toBe(30);
   });
 });
 
@@ -87,10 +87,10 @@ describe("the sales component", () => {
     expect(progress).toEqual([]);
   });
 
-  it("default window carries window_hours=48 in the counts", async () => {
+  it("default window carries window_days=30 in the counts", async () => {
     const { ctx } = ctxFor(job(), { [ONBOARD_SALES_ASINS]: async () => {} });
     const r = await sales.run(ctx);
-    expect(r.counts.window_hours).toBe(48);
+    expect(r.counts.window_days).toBe(30);
     expect(r.outcomes._window).toMatch(/\(default\)$/);
   });
 
