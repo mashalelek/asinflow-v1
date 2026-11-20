@@ -85,8 +85,11 @@ export function parseTsv(text: string): Record<string, string>[] {
 
 const int = (v: string | undefined) => { const n = parseInt(String(v ?? ""), 10); return Number.isFinite(n) ? n : 0; };
 const num = (v: string | undefined) => { const n = parseFloat(String(v ?? "")); return Number.isFinite(n) ? n : null; };
-/** The report's UTC-ish day windows: [from 00:00Z, to 23:59:59Z]. */
-const dayWindow = (from: string, to: string) => ({ dataStartTime: `${from}T00:00:00Z`, dataEndTime: `${to}T23:59:59Z` });
+/** The report's day windows: [from 00:00Z, to 23:59:59Z], the end clamped to now (a dataEndTime in the future ends the report FATAL — job 61, 2026-11-20). */
+export function dayWindow(from: string, to: string, now: Date = new Date()): { dataStartTime: string; dataEndTime: string } {
+  const end = Math.min(Date.parse(`${to}T23:59:59Z`), now.getTime() - 60_000);
+  return { dataStartTime: `${from}T00:00:00Z`, dataEndTime: new Date(end).toISOString().replace(/\.\d{3}Z$/, "Z") };
+}
 const addDays = (ymd: string, n: number) => new Date(Date.parse(`${ymd}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
 /** ≤ 60-day inclusive chunks of [from, to]. */
 export function reportChunks(from: string, to: string, days = REPORT_CHUNK_DAYS): [string, string][] {

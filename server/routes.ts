@@ -44,6 +44,7 @@ import { readSaveFailures } from "./po-documents";
 import { listPoDocuments, PO_DOCUMENTS_SQL } from "./po-documents-routes";
 import { canonicalPaymentName } from "@shared/po-form";
 import { settingsFromRows, settingsToRows } from "@shared/settings-keys";
+import { readAsinActuals, type AsinActuals } from "./finances-aggregate";
 import { applyAsinPackUpdate, parsePack } from "./asin-pack";
 import { setAsinPack, confirmPackSuggestions, parseUploadPack } from "./asin-pack-review";
 import { CaptureSchema, clipCapture, extractPrefill, enrichPrefill, mergedPagesText, storePrefill, getPrefill, logPrefill, supplierForHost } from "./po-prefill";
@@ -930,7 +931,8 @@ export async function registerRoutes(
       // §14 parked/dead (2026-09-07): Show parked / Show dead are separate
       // view-scope toggles; includeArchived kept as a legacy alias for
       // includeParked (old clients / scripts).
-      const { startDate, endDate, includeArchived, includeParked, includeDead } = req.query as Record<string, string | undefined>;
+      let { startDate, endDate } = req.query as Record<string, string | undefined>;
+      const { includeArchived, includeParked, includeDead } = req.query as Record<string, string | undefined>;
       // Row refresh (2026-10-18): ?asins=A,B,… returns just those rows — what a
       // finished job reloads (the rows of its scope that are on screen) instead
       // of the whole list. Capped; ASIN-shaped values only.
@@ -971,6 +973,8 @@ export async function registerRoutes(
         // Range entirely outside sales coverage: refuse rather than return
         // every ASIN as "no sales" (§23 coverage guard).
         if (repRange!.noCoverage) activeFilter = `FALSE`;
+        // The Repricer's Actual columns read the same Actuals data as the ASINs table, for its own range (Finances patch §6).
+        if (!startDate || !endDate) { startDate = repRange!.effective.from; endDate = repRange!.effective.to; }
       }
 
       const result = await query(`
@@ -1007,6 +1011,7 @@ export async function registerRoutes(
       // Aggregated sales for date range
       const salesMap = new Map<string, any>();
       const daysInStockMap = new Map<string, number>();
+      let finMap = new Map<string, AsinActuals>();
       if (startDate && endDate) {
         const salesResult = await query(`
           SELECT
@@ -1022,6 +1027,10 @@ export async function registerRoutes(
           GROUP BY a.asin
         `, withSubset([startDate, endDate])).catch(() => ({ rows: [] as any[] }));
         for (const row of salesResult.rows) salesMap.set(row.asin, row);
+        // Finances facts per ASIN for the range (patch commit 8): ONE accessor for every table; units / sales / refunds
+        // come from it when it has the ASIN (SB's basis), sales_daily only before the backfill has covered the range.
+        try { finMap = await readAsinActuals(startDate, endDate, subset, (sql, params) => query(sql, params)); }
+        catch (err: any) { log(`asin actuals: ${err?.message ?? err}`, "api"); }
 
         // Days in stock = distinct snapshot days with FBA stock. The distinct (asin, day) pairs are hashed first
         // from the in-stock partial index (migration 108) — COUNT(DISTINCT DATE(…)) over the raw rows sorted 130k
@@ -1150,13 +1159,15 @@ export async function registerRoutes(
         // row is total = the stages, so this is 0 — never negative.
         const fbaStock = stock.total - stock.on_order - stock.at_prep - stock.at_warehouse;
 
-        const actuals = sales ? {
-          units_sold: parseInt(sales.units_sold) || 0,
-          revenue: parseFloat(sales.revenue) || 0,
-          units_refunded: parseInt(sales.units_refunded) || 0,
-          refund_amount: parseFloat(sales.refund_amount) || 0,
-          days_with_sales: parseInt(sales.days_with_sales) || 0,
+        const fin = finMap.get(row.asin) ?? null;
+        const actuals = sales || fin ? {
+          units_sold: fin ? fin.units : parseInt(sales.units_sold) || 0,
+          revenue: fin ? fin.sales : parseFloat(sales.revenue) || 0,
+          units_refunded: fin ? fin.refunds : parseInt(sales?.units_refunded) || 0,
+          refund_amount: fin ? fin.refundAmount : parseFloat(sales?.refund_amount) || 0,
+          days_with_sales: parseInt(sales?.days_with_sales) || 0,
           days_in_stock: daysInStockMap.get(row.asin) ?? 0,
+          fin: fin ? { sales: fin.sales, units: fin.units, refunds: fin.refunds, refund_amount: fin.refundAmount, refund_cost: fin.refundCost, amazon_fees: fin.amazonFees, cogs: fin.cogs, prep: fin.prep, cost_of_goods: fin.costOfGoods, net_profit: fin.netProfit, est_payout: fin.estPayout, cogs_missing_units: fin.cogsMissingUnits } : null,
         } : null;
 
         const d = deltaMap.get(row.asin);

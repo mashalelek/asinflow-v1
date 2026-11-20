@@ -12,7 +12,7 @@
 // Settings values (§5 "Computed when viewed").
 import pool, { query as defaultQuery } from "./db";
 import { log } from "./log";
-import { LIVE_REFUND_TX_SQL, LIVE_SHIPMENT_TX_SQL } from "./finances-sql";
+import { LIVE_QTY_CTE_SQL, LIVE_REFUND_TX_SQL, LIVE_SHIPMENT_TX_SQL } from "./finances-sql";
 import { ensureShipmentsKnown } from "./finances-reports";
 import { settingsFromRows } from "@shared/settings-keys";
 import { FOUND_REASONS, GROUP_ORDER, LOST_REASONS, groupOf, labelOf, type FinancesBreakdown, type FinancesBreakdownLine } from "@shared/finances";
@@ -68,6 +68,7 @@ export async function rebuildFinancesDaily(from: string, to: string, opts: { liv
     // A. Order lines by purchase day: Sales, Units, Orders, the fee lines, COGS, Prep (§2, §3, §5).
     await q(`
       WITH live AS (${LIVE_SHIPMENT_TX_SQL}),
+      ${LIVE_QTY_CTE_SQL},
       fin AS (
         SELECT l.order_id, l.sku,
                COALESCE(SUM(l.amount) FILTER (WHERE l.line = 'sales'), 0)        AS principal,
@@ -76,11 +77,11 @@ export async function rebuildFinancesDaily(from: string, to: string, opts: { liv
                COALESCE(SUM(l.amount) FILTER (WHERE l.line = 'referral_fee'), 0) AS referral_fee,
                COALESCE(SUM(l.amount) FILTER (WHERE l.line = 'vcf'), 0)          AS vcf,
                COALESCE(SUM(l.amount) FILTER (WHERE l.line LIKE 'fee:%'), 0)     AS other_fee,
-               COALESCE(SUM(qty.q), 0)                                            AS quantity,
+               COALESCE(MAX(lq.qty), 0)                                           AS quantity,
                bool_or(live.transaction_status = 'DEFERRED')                      AS any_deferred
           FROM live
           JOIN finances_lines l ON l.transaction_id = live.transaction_id AND l.sku IS NOT DISTINCT FROM live.sku
-          LEFT JOIN LATERAL (SELECT MAX(x.quantity) AS q FROM finances_lines x WHERE x.transaction_id = live.transaction_id AND x.sku IS NOT DISTINCT FROM live.sku) qty ON true
+          LEFT JOIN live_qty lq ON lq.order_id = live.order_id AND lq.sku IS NOT DISTINCT FROM live.sku
          WHERE live.order_id IN (SELECT order_id FROM finances_order_lines WHERE purchase_day BETWEEN $1::date AND $2::date)
          GROUP BY l.order_id, l.sku),
       -- the same ASIN's most recent POSTED per-unit figures (§3 source 3)
@@ -94,7 +95,9 @@ export async function rebuildFinancesDaily(from: string, to: string, opts: { liv
            AND l.asin IN (SELECT DISTINCT asin FROM finances_order_lines WHERE purchase_day BETWEEN $1::date AND $2::date)
          ORDER BY l.asin, l.posted_at DESC),
       lines AS (
-        SELECT ol.purchase_day AS day, ol.asin, ol.order_id, ol.units,
+        SELECT ol.purchase_day AS day, ol.asin, ol.order_id,
+               -- units ordered, or the units Amazon shipped when more (a free replacement shipment under the same order id)
+               GREATEST(ol.units, COALESCE(f.quantity, 0)) AS units,
                f.order_id IS NOT NULL AS has_row, COALESCE(f.any_deferred, false) AS any_deferred, COALESCE(f.quantity, 0) AS fin_qty,
                GREATEST(ol.units - COALESCE(f.quantity, 0), 0) AS rest_units,
                COALESCE(NULLIF(ol.item_price, 0) / NULLIF(ol.units, 0), lp.unit_price, e.lowest_fba_price, 0) AS unit_price,
@@ -111,7 +114,8 @@ export async function rebuildFinancesDaily(from: string, to: string, opts: { liv
           LEFT JOIN asin_estimates e ON e.asin = ol.asin
           LEFT JOIN fin_periods cp ON cp.asin = ol.asin AND ol.purchase_day BETWEEN cp.from_day AND cp.to_day
           LEFT JOIN fin_hazmat h ON h.asin = ol.asin
-         WHERE ol.purchase_day BETWEEN $1::date AND $2::date AND ol.order_status <> 'Cancelled' AND ol.asin ~ '${ASIN_SQL}'),
+         -- S01- orders (Amazon's own replacement / MCF orders) are not sales (SB leaves them out; fixture diff 2026-11-19)
+         WHERE ol.purchase_day BETWEEN $1::date AND $2::date AND ol.order_status <> 'Cancelled' AND ol.order_id NOT LIKE 'S01-%' AND ol.asin ~ '${ASIN_SQL}'),
       per_line AS (
         SELECT day, asin, order_id, units,
                CASE WHEN has_row THEN fin_sales + rest_units * unit_price ELSE units * unit_price END AS sales,

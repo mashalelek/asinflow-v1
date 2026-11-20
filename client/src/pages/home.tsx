@@ -1966,6 +1966,7 @@ export default function Home() {
               onSort={handleSort}
               includeInboundShipping={includeInboundShipping}
               dateRangeLabel={dateRangeLabel}
+              actualsRange={{ from: startDate, to: endDate }}
               colFilters={colFilters}
               onFilterApply={(f) => setColFilters((prev) => ({ ...prev, [f.colId]: f }))}
               onFilterClear={(colId) => setColFilters((prev) => { const next = { ...prev }; delete next[colId]; return next; })}

@@ -85,7 +85,9 @@ export function parseTransaction(tx: any, skuToAsin?: (sku: string) => string | 
     (tx.items ?? []).forEach((it: any, i: number) => {
       const c = ctxOf(it);
       for (const [leaf, amt] of leaves(it.breakdowns)) {
-        if (amt === 0) continue;
+        // A $0 leaf is dropped — except the principal: a free replacement shipment ($0 principal, no fees) must still
+        // leave a row, so its units count once and are never priced or fee-estimated as "no row yet" (§3).
+        if (amt === 0 && !leaf.startsWith("ProductCharges")) continue;
         lines.push({ item_index: i, ...c, leaf_path: leaf, line: classifyLeaf(type, leaf), amount: r2(amt) });
       }
     });

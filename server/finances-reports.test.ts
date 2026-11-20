@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { fetchReport, parseRemovals, parseReturns, parseStorage, parseTsv, reportChunks, splitByWeight, storageMonthFor, storeRemovals, storeReturns, storeStorage, type ReportDeps } from "./finances-reports";
+import { dayWindow, fetchReport, parseRemovals, parseReturns, parseStorage, parseTsv, reportChunks, splitByWeight, storageMonthFor, storeRemovals, storeReturns, storeStorage, type ReportDeps } from "./finances-reports";
 
 const fx = (n: string) => fs.readFileSync(path.join(__dirname, "__fixtures__", "finances", n), "utf8");
 
@@ -34,6 +34,11 @@ describe("parsers", () => {
     expect(parseTsv("a\tb\n1\t2\n")).toEqual([{ a: "1", b: "2" }]);
     expect(reportChunks("2026-08-01", "2026-11-19")).toEqual([["2026-08-01", "2026-09-29"], ["2026-09-30", "2026-11-19"]]);
     expect(reportChunks("2026-08-01", "2026-08-31")).toEqual([["2026-08-01", "2026-08-31"]]);
+  });
+  it("dayWindow clamps the end to now (a future dataEndTime ends the report FATAL)", () => {
+    const now = new Date("2026-11-20T18:00:00Z");
+    expect(dayWindow("2026-11-17", "2026-11-20", now)).toEqual({ dataStartTime: "2026-11-17T00:00:00Z", dataEndTime: "2026-11-20T17:59:00Z" });
+    expect(dayWindow("2026-08-01", "2026-08-31", now)).toEqual({ dataStartTime: "2026-08-01T00:00:00Z", dataEndTime: "2026-08-31T23:59:59Z" });
   });
   it("storageMonthFor: a storage row posted on Nov 7 is October's report", () => {
     expect(storageMonthFor("2026-11-07")).toBe("2026-10"); expect(storageMonthFor("2026-01-07")).toBe("2025-12");

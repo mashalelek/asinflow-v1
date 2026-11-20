@@ -55,6 +55,8 @@ import { useTagGroups, useAllTags, compareTagKeys } from "@/lib/use-tag-groups";
 import { submissionCategory } from "@/lib/submissions-api";
 import { TagEditor } from "@/components/tag-editor";
 import { InlineNoteCell } from "@/components/inline-note";
+import { FinancesBreakdownPanel } from "@/components/finances-breakdown";
+import { getActualProfit } from "@/lib/profit";
 
 /** Notes / Promos save (PUT) — a failed save throws, so the shared editor restores the note and shows a toast. */
 async function putNote(url: string, body: Record<string, string | null>): Promise<void> {
@@ -288,6 +290,8 @@ interface ResultsTableProps {
   onSort: (colId: ColumnId) => void;
   includeInboundShipping?: boolean;
   dateRangeLabel?: string;
+  /** The page's Actuals range (YYYY-MM-DD, Pacific days): with it, an Actual Profit cell opens the ASIN's breakdown panel (Finances patch commit 8). */
+  actualsRange?: { from: string; to: string };
   colFilters?: FilterMap;
   onFilterApply?: (filter: ColFilter) => void;
   onFilterClear?: (colId: ColumnId) => void;
@@ -502,21 +506,18 @@ function computeRowValue(
     }
     case "actUnitsSold": return result.actuals?.units_sold ?? null;
     case "actRevenue": return result.actuals?.revenue ?? null;
-    case "actRefunds": return result.actuals?.units_refunded ?? null;
+    case "actRefunds": return result.actuals?.units_refunded ?? null; // the Finances refund count when the range has it (routes: fin.refunds)
     case "actRefundPct": return result.actuals && result.actuals.units_sold > 0
       ? (result.actuals.units_refunded / result.actuals.units_sold) * 100 : null;
     case "actProfit":
     case "actProfitPerUnit":
     case "actMargin":
     case "actRoi": {
-      if (!result.actuals || result.actuals.units_sold === 0 || result.actualCogs == null) return null;
-      const au = result.actuals.units_sold;
-      const ar = result.actuals.revenue;
-      const ap = getEffectivePrep(result, settings);
-      const as2 = getEffectiveStorage(result, settings);
-      const ac = calculateProfit(ar / au, result.actualCogs, result.feesData.fbaFulfillmentFee ?? 0, result.feesData.referralFee ?? 0, result.feesData.feesEstimatePrice, result.catalogData.weightLbs, ap.value, as2.value, settings, true, appliesDgHazmatSurcharge(result), result.category ?? null);
-      if (colId === "actProfit") return ac.profit * au;
-      if (colId === "actProfitPerUnit") return ac.profit;
+      // ONE accessor (Finances patch commit 8): getActualProfit — the stored Finances facts when the range has them, else the estimate.
+      const ac = getActualProfit(result, settings, includeInboundShipping);
+      if (!ac) return null;
+      if (colId === "actProfit") return ac.totalProfit;
+      if (colId === "actProfitPerUnit") return ac.profitPerUnit;
       if (colId === "actMargin") return ac.margin;
       return ac.roi;
     }
@@ -552,6 +553,7 @@ export function ResultsTable({
   sortCol, sortDir, onSort,
   includeInboundShipping = true,
   dateRangeLabel,
+  actualsRange,
   colFilters = {},
   onFilterApply,
   onFilterClear,
@@ -757,7 +759,14 @@ export function ResultsTable({
   const productVisible = visibleCols.includes("product");
   // Group band was removed — these are no longer needed
 
+  // Finances patch (commit 8): the ASIN breakdown panel, opened from an Actual Profit cell for the page's range.
+  const [actualsFor, setActualsFor] = useState<AsinResult | null>(null);
+  const openActuals = useCallback((r: AsinResult) => setActualsFor(r), []);
+  const actualsPanel = actualsFor && actualsRange
+    ? <FinancesBreakdownPanel title={`${actualsFor.asin}${actualsFor.catalogData?.title ? ` · ${actualsFor.catalogData.title.slice(0, 48)}` : ""}`} subtitle={dateRangeLabel ?? `${actualsRange.from} – ${actualsRange.to}`} from={actualsRange.from} to={actualsRange.to} asin={actualsFor.asin} onClose={() => setActualsFor(null)} />
+    : null;
   return (
+    <>
     <div ref={setScrollEl} className="w-full overflow-auto relative" style={{ maxHeight: "calc(100vh - 280px)" }} data-list-scroll="results-table">
       <table className="border-collapse text-sm w-full" data-testid="results-table">
         <thead className="sticky top-0 z-20">
@@ -1156,7 +1165,7 @@ export function ResultsTable({
                       </span>
                     );
                   } else {
-                    content = renderCell(colId, result, price, label, hasError, profitData, settings, prep, storage, includeInboundShipping, priceFallback, onResultUpdate);
+                    content = renderCell(colId, result, price, label, hasError, profitData, settings, prep, storage, includeInboundShipping, priceFallback, onResultUpdate, actualsRange ? openActuals : undefined);
                   }
                   return (
                     <td key={colId} className={`px-3 py-1.5 overflow-hidden ${col.align === "right" ? "text-right" : ""}`} style={w ? { width: w, minWidth: w, maxWidth: w } : undefined}>
@@ -1170,6 +1179,8 @@ export function ResultsTable({
         </tbody>
       </table>
     </div>
+    {actualsPanel && createPortal(actualsPanel, document.body)}
+    </>
   );
 }
 
@@ -1858,6 +1869,8 @@ export function renderCell(
   includeInboundShipping = true,
   priceFallback = false,
   onResultUpdate?: (asin: string, updates: Partial<AsinResult>) => void,
+  /** Finances patch (commit 8): the Actual Profit cell opens the ASIN's breakdown panel for the page's range. */
+  onOpenActuals?: (result: AsinResult) => void,
 ) {
   switch (colId) {
     case "brand": {
@@ -2377,108 +2390,39 @@ export function renderCell(
     }
 
     case "actProfit": {
+      // Finances patch (commit 8): the stored facts through getActualProfit; the cell opens the ASIN's breakdown panel for the page's range (§6).
       if (!result.actuals || result.actuals.units_sold === 0) return numCell(fmt(0));
-      if (result.actualCogs == null) return numCell("—"); // no Actual COGS (every PO row canceled, or no PO yet): not $0
-      const units = result.actuals.units_sold;
-      const rev = result.actuals.revenue;
-      const prep2 = getEffectivePrep(result, settings);
-      const storage2 = getEffectiveStorage(result, settings);
-      const perUnit = calculateProfit(
-        rev / units,
-        result.actualCogs,
-        result.feesData.fbaFulfillmentFee ?? 0,
-        result.feesData.referralFee ?? 0,
-        result.feesData.feesEstimatePrice,
-        result.catalogData.weightLbs,
-        prep2.value, storage2.value, settings,
-        includeInboundShipping,
-        appliesDgHazmatSurcharge(result),
-        result.category ?? null
-      );
-      const total = perUnit.profit * units;
-      return (
-        <span className={`font-mono text-sm font-semibold ${total >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          {fmt(total)}
-        </span>
-      );
+      const ac = getActualProfit(result, settings, includeInboundShipping);
+      if (!ac) return numCell("—"); // no Actual COGS (every PO row canceled, or no PO yet) and no Finances facts: not $0
+      const total = ac.totalProfit;
+      const cls = `font-mono text-sm font-semibold ${total >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`;
+      const missing = result.actuals.fin?.cogs_missing_units ?? 0;
+      const title = missing > 0 ? `${missing} ASIN unit${missing === 1 ? "" : "s"} sold with no PO cost (COGS $0 for them)` : undefined;
+      if (result.actuals.fin && onOpenActuals) {
+        return <button type="button" className={`${cls} underline decoration-dotted underline-offset-4 decoration-border hover:decoration-foreground`} title={title ?? "Open the profit breakdown"} onClick={() => onOpenActuals(result)} data-testid={`actual-profit-${result.asin}`}>{fmt(total)}</button>;
+      }
+      return <span className={cls} title={title}>{fmt(total)}</span>;
     }
 
     case "actProfitPerUnit": {
       if (!result.actuals || result.actuals.units_sold === 0) return numCell(fmt(0));
-      if (result.actualCogs == null) return numCell("—"); // no Actual COGS (every PO row canceled, or no PO yet): not $0
-      const units = result.actuals.units_sold;
-      const rev = result.actuals.revenue;
-      const prep2 = getEffectivePrep(result, settings);
-      const storage2 = getEffectiveStorage(result, settings);
-      const perUnit = calculateProfit(
-        rev / units,
-        result.actualCogs,
-        result.feesData.fbaFulfillmentFee ?? 0,
-        result.feesData.referralFee ?? 0,
-        result.feesData.feesEstimatePrice,
-        result.catalogData.weightLbs,
-        prep2.value, storage2.value, settings,
-        includeInboundShipping,
-        appliesDgHazmatSurcharge(result),
-        result.category ?? null
-      );
-      return (
-        <span className={`font-mono text-sm ${perUnit.profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          {fmt(perUnit.profit)}
-        </span>
-      );
+      const ac = getActualProfit(result, settings, includeInboundShipping);
+      if (!ac) return numCell("—");
+      return <span className={`font-mono text-sm ${ac.profitPerUnit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{fmt(ac.profitPerUnit)}</span>;
     }
 
     case "actMargin": {
       if (!result.actuals || result.actuals.units_sold === 0) return numCell("0.0%");
-      if (result.actualCogs == null) return numCell("—"); // no Actual COGS: not 0%
-      const units = result.actuals.units_sold;
-      const rev = result.actuals.revenue;
-      const prep2 = getEffectivePrep(result, settings);
-      const storage2 = getEffectiveStorage(result, settings);
-      const perUnit = calculateProfit(
-        rev / units,
-        result.actualCogs,
-        result.feesData.fbaFulfillmentFee ?? 0,
-        result.feesData.referralFee ?? 0,
-        result.feesData.feesEstimatePrice,
-        result.catalogData.weightLbs,
-        prep2.value, storage2.value, settings,
-        includeInboundShipping,
-        appliesDgHazmatSurcharge(result),
-        result.category ?? null
-      );
-      return (
-        <span className={`font-mono text-sm ${perUnit.margin >= settings.minMarginThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          {perUnit.margin.toFixed(1)}%
-        </span>
-      );
+      const ac = getActualProfit(result, settings, includeInboundShipping);
+      if (!ac) return numCell("—");
+      return <span className={`font-mono text-sm ${ac.margin >= settings.minMarginThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{ac.margin.toFixed(1)}%</span>;
     }
 
     case "actRoi": {
       if (!result.actuals || result.actuals.units_sold === 0) return numCell("0.0%");
-      if (result.actualCogs == null) return numCell("—"); // no Actual COGS: not 0%
-      const units = result.actuals.units_sold;
-      const rev = result.actuals.revenue;
-      const prep2 = getEffectivePrep(result, settings);
-      const storage2 = getEffectiveStorage(result, settings);
-      const perUnit = calculateProfit(
-        rev / units,
-        result.actualCogs,
-        result.feesData.fbaFulfillmentFee ?? 0,
-        result.feesData.referralFee ?? 0,
-        result.feesData.feesEstimatePrice,
-        result.catalogData.weightLbs,
-        prep2.value, storage2.value, settings,
-        includeInboundShipping,
-        appliesDgHazmatSurcharge(result),
-        result.category ?? null
-      );
-      return (
-        <span className={`font-mono text-sm ${perUnit.roi >= settings.minRoiThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          {perUnit.roi.toFixed(1)}%
-        </span>
-      );
+      const ac = getActualProfit(result, settings, includeInboundShipping);
+      if (!ac) return numCell("—");
+      return <span className={`font-mono text-sm ${ac.roi >= settings.minRoiThreshold ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{ac.roi.toFixed(1)}%</span>;
     }
 
     case "dateAdded": {

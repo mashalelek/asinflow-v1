@@ -50,11 +50,9 @@ export function getEstimatedProfit(
  * Returns { totalProfit, profitPerUnit, margin, roi } or null if no
  * sales data exists.
  *
- * // TODO: Currently uses estimated fees (fbaFee, referralFee from
- * // asin_estimates) applied to actual revenue-per-unit — not the true
- * // actual_fba_fees / actual_referral_fees / actual_other_fees from
- * // sales_daily. Swap to true actual fees when the Finances API
- * // integration lands.
+ * Since the Finances API patch the stored facts (`actuals.fin`) are the
+ * value; the estimated-fee math below only serves a range the Finances
+ * backfill has not covered yet.
  */
 export function getActualProfit(
   result: AsinResult,
@@ -69,6 +67,20 @@ export function getActualProfit(
   revenue: number;
 } | null {
   if (!result.actuals || result.actuals.units_sold === 0) return null;
+  // Finances API patch (commit 8, SPEC §6): the stored facts win — Net profit for the range from the same accessor as the
+  // breakdown panel (fees Amazon charged, COGS by cost period, Prep by the Settings rule). The estimate below is the
+  // fallback for a range the backfill has not covered.
+  const fin = result.actuals.fin;
+  if (fin && fin.units > 0) {
+    return {
+      totalProfit: fin.net_profit,
+      profitPerUnit: fin.net_profit / fin.units,
+      margin: fin.sales ? (fin.net_profit / fin.sales) * 100 : 0,
+      roi: fin.cost_of_goods ? (fin.net_profit / Math.abs(fin.cost_of_goods)) * 100 : 0,
+      unitsSold: fin.units,
+      revenue: fin.sales,
+    };
+  }
   const cogs = result.actualCogs;
   if (cogs == null) return null;
   const au = result.actuals.units_sold;

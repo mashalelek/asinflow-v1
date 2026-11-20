@@ -285,6 +285,8 @@ export default function Repricer() {
           priceSource={priceSource}
           settings={settings}
           columnConfig={columnConfig}
+          actualsRange={rangeInfo?.effective ?? range}
+          dateRangeLabel={`${(rangeInfo?.effective ?? range).from} → ${(rangeInfo?.effective ?? range).to}`}
           activeFilter="all"
           buySet={buySet}
           onToggleBuy={(asin) => setBuySet((prev) => { const n = toggleIn(prev, asin); saveBuyList(n); return n; })}

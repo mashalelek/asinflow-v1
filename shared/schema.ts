@@ -99,6 +99,22 @@ export interface StockData {
   hasSnapshot: boolean;
 }
 
+/** The Finances facts for the range (Finances API patch commit 8, SPEC §6): the same accessor as the breakdown panel, so a table's Actual Profit equals the panel's Net profit. Absent until `npm run backfill:finances` has covered the range. */
+export interface ActualsFin {
+  sales: number;
+  units: number;
+  refunds: number;
+  refund_amount: number;
+  refund_cost: number;
+  amazon_fees: number;
+  cogs: number;
+  prep: number;
+  cost_of_goods: number;
+  net_profit: number;
+  est_payout: number;
+  /** ASIN units sold with no PO cost (the "no PO cost" marker). */
+  cogs_missing_units: number;
+}
 export interface ActualsData {
   units_sold: number;
   revenue: number;
@@ -106,6 +122,7 @@ export interface ActualsData {
   refund_amount: number;
   days_with_sales: number;
   days_in_stock: number;
+  fin?: ActualsFin | null;
 }
 
 // §6 Submission column — read-only surface of the §19 listing_submissions
