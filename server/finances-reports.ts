@@ -66,7 +66,14 @@ export async function fetchReport(reportType: string, dataStartTime: string, dat
     await deps.sleep(POLL_MS);
     const st = await deps.get(`/reports/2021-06-30/reports/${reportId}`);
     if (st?.processingStatus === "DONE") { docId = String(st.reportDocumentId); break; }
-    if (st?.processingStatus === "FATAL" || st?.processingStatus === "CANCELLED") throw new Error(`${reportType} report ${reportId} ended ${st.processingStatus}`);
+    if (st?.processingStatus === "FATAL" || st?.processingStatus === "CANCELLED") {
+      // Amazon often attaches a document saying why (an error code and a sentence): read it into the error so the ledger row explains itself.
+      let why = "";
+      if (st.reportDocumentId) {
+        try { const d = await deps.get(`/reports/2021-06-30/documents/${st.reportDocumentId}`); let b = await deps.download(String(d.url)); if (d?.compressionAlgorithm === "GZIP") b = zlib.gunzipSync(b); why = ` — ${b.toString("utf8").replace(/\s+/g, " ").slice(0, 300)}`; } catch { /* the status alone, then */ }
+      }
+      throw new Error(`${reportType} report ${reportId} (${dataStartTime.slice(0, 10)}..${dataEndTime.slice(0, 10)}) ended ${st.processingStatus}${why}`);
+    }
   }
   if (!docId) throw new Error(`${reportType} report ${reportId} timed out`);
   const doc = await deps.get(`/reports/2021-06-30/documents/${docId}`);
