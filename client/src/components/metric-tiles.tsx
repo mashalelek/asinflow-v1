@@ -4,10 +4,11 @@
  * range column — a coloured header band (the range name and its resolved
  * dates; --dash-band-1…5 by column position, the only colour on the page),
  * then three hairline-separated sections: SPEND (main value + a 2 × 2 grid),
- * SALES (main value + Orders / Units · Refunds), PROFIT (visible dim
- * placeholders with the "after the Finances API patch" note in the label
- * row). Every row is shown — no "More" link. The data shapes and the cell
- * texts are the shipped ones (shared/dashboard.ts, metric-grid.tsx helpers).
+ * SALES (main value + Orders / ASIN units · Refunds "33 · $962.50"), PROFIT
+ * (Net profit main; Gross profit, Est. payout, Margin, ROI; a "More" link that
+ * opens the breakdown panel for the tile's range — Finances API patch commit
+ * 7, mockup docs/mockups/finances-breakdown-2026-11-19.html). The data shapes
+ * and the cell texts are the shipped ones (shared/dashboard.ts, metric-grid.tsx).
  */
 import { Link } from "wouter";
 import { DASHBOARD_ROWS, PENDING_TOOLTIP, type DashboardColumn, type DashboardGrid, type DashboardRowKey } from "@shared/dashboard";
@@ -44,7 +45,7 @@ function Sub({ label, children, note, testId, dim, title }: { label: string; chi
   );
 }
 
-export function MetricTile({ col, index, count, coverage }: { col: DashboardColumn; index: number; count: number; coverage: string }) {
+export function MetricTile({ col, index, count, coverage, onMore }: { col: DashboardColumn; index: number; count: number; coverage: string; onMore?: (col: DashboardColumn) => void }) {
   const c = col.cells;
   const spend = cellText(row("spend"), c.spend);
   const due = cellText(row("refunds_due"), c.refunds_due);
@@ -56,6 +57,12 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
   const LINK = "underline underline-offset-4 decoration-border hover:decoration-foreground";
   const sales = cellText(row("sales"), c.sales);
   const ou = cellText(row("orders_units"), c.orders_units);
+  const rf = cellText(row("refunds"), c.refunds);
+  const np = cellText(row("net_profit"), c.net_profit);
+  const gp = cellText(row("gross_profit"), c.gross_profit);
+  const ep = cellText(row("est_payout"), c.est_payout);
+  const mg = cellText(row("margin"), c.margin);
+  const roi = cellText(row("roi"), c.roi);
   const sameDates = col.eastern.from === col.pacific.from && col.eastern.to === col.pacific.to;
   const t = (k: string) => `tile-${col.key}-${k}`;
   return (
@@ -105,33 +112,38 @@ export function MetricTile({ col, index, count, coverage }: { col: DashboardColu
         {sales.small && <div className="-mt-2 text-[11px] text-muted-foreground">{sales.small}</div>}
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
           <Sub label="Orders / ASIN units" note={ou.small} testId={t("orders-units")}><span className={`whitespace-nowrap text-[15px] xl:text-base ${ou.muted ? DIM : ""}`}>{ou.main}</span></Sub>
-          <Sub label="Refunds" testId={t("refunds")} dim>—</Sub>
+          <Sub label="Refunds" testId={t("refunds")} dim={rf.muted} title={rf.tooltip}>
+            {rf.muted ? <span>—</span> : <span className="inline-flex flex-wrap items-baseline gap-x-1"><span>{rf.main}</span>{rf.small && <span className="text-xs font-normal text-muted-foreground whitespace-nowrap">· {rf.small}</span>}</span>}
+          </Sub>
         </div>
       </section>
-      {/* PROFIT — rows stay visible as dim placeholders (Maria 2026-11-04); the Finances patch fills them and drops the note. */}
+      {/* PROFIT (Finances patch commit 7): Net profit main; Gross profit · Est. payout · Margin · ROI; "More" opens the breakdown panel for this range. */}
       <section className={`${SECTION} border-t pb-[18px]`} data-testid={t("profit")}>
         <div className="flex items-baseline justify-between gap-3">
           <div className={LABEL}>Profit</div>
-          <div className={`text-[11px] text-right ${DIM}`} data-testid={t("profit-note")}>{PENDING_TOOLTIP}</div>
+          <button type="button" className="text-xs" style={{ color: "#93c5fd" }} onClick={() => onMore?.(col)} data-testid={t("more")}>More</button>
         </div>
-        <Main label="Gross profit" value="—" dim testId={t("gross-profit")} />
+        <Main label="Net profit" value={np.main} dim={np.muted} testId={t("net-profit")} />
+        {np.small && <div className="-mt-2 text-[11px] text-muted-foreground">{np.small}</div>}
         <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-          <Sub label="Net profit" testId={t("net-profit")} dim>—</Sub>
-          <Sub label="Est. payout" testId={t("est-payout")} dim>—</Sub>
+          <Sub label="Gross profit" testId={t("gross-profit")} dim={gp.muted}>{gp.main}</Sub>
+          <Sub label="Est. payout" testId={t("est-payout")} dim={ep.muted}>{ep.main}</Sub>
+          <Sub label="Margin" testId={t("margin")} dim={mg.muted}>{mg.main}</Sub>
+          <Sub label="ROI" testId={t("roi")} dim={roi.muted}>{roi.main}</Sub>
         </div>
       </section>
     </div>
   );
 }
 
-export function MetricTiles({ grid, loading }: { grid: DashboardGrid | null; loading: boolean }) {
+export function MetricTiles({ grid, loading, onMore }: { grid: DashboardGrid | null; loading: boolean; onMore?: (col: DashboardColumn) => void }) {
   const cols = grid?.columns ?? [];
   const coverage = coverageTooltip(grid?.coverage);
   if (!grid) return <div className="text-xs text-muted-foreground" data-testid="dashboard-tiles" aria-busy={loading}>{loading ? "Loading…" : ""}</div>;
   return (
     <div className={`grid grid-cols-1 gap-4 lg:[grid-template-columns:repeat(var(--tiles),minmax(0,1fr))] lg:[grid-auto-rows:auto] transition-opacity ${loading ? "opacity-60" : ""} ${cols.length === 1 ? "lg:max-w-[28rem]" : ""}`}
          style={{ ["--tiles" as string]: String(cols.length) }} data-testid="dashboard-tiles" aria-busy={loading}>
-      {cols.map((col, i) => <MetricTile key={col.key} col={col} index={i} count={cols.length} coverage={coverage} />)}
+      {cols.map((col, i) => <MetricTile key={col.key} col={col} index={i} count={cols.length} coverage={coverage} onMore={onMore} />)}
     </div>
   );
 }

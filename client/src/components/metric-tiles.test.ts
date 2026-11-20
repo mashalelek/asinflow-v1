@@ -7,8 +7,8 @@ import { DASHBOARD_ROWS } from "@shared/dashboard";
 
 // Dashboard tiles (patch docs/claude_spec-patch-dashboard-tiles.md §1.3, §1.5):
 // one card per range column with a band by position, three hairline sections,
-// 28 px main values, a 2-column sub-metric grid, visible dim Profit rows,
-// no "More" link; the band variables exist under :root (AF is dark only since 2026-11-18).
+// 28 px main values, a 2-column sub-metric grid, the PROFIT rows filled by the
+// Finances patch with a "More" link; the band variables exist under :root (AF is dark only since 2026-11-18).
 const tiles = readFileSync(resolve(__dirname, "metric-tiles.tsx"), "utf8");
 const css = readFileSync(resolve(__dirname, "../index.css"), "utf8");
 
@@ -23,7 +23,7 @@ describe("bands", () => {
     const dark = css.slice(css.indexOf(":root {"));
     expect(dark).toMatch(/--dash-band-1: #3A4F68;[\s\S]*--dash-band-2: #3E5B6E;[\s\S]*--dash-band-3: #45666E;[\s\S]*--dash-band-4: #4E6E6B;[\s\S]*--dash-band-5: #56746A;/);
     expect(tiles).toMatch(/backgroundColor: bandVar\(index, count\)/);
-    expect(tiles.match(/#[0-9A-Fa-f]{6}/g)).toEqual(["#FAFAF9", "#E7E5E4"]); // only the two band ink colours from the mockup
+    expect(tiles.match(/#[0-9A-Fa-f]{6}/g)).toEqual(["#FAFAF9", "#E7E5E4", "#93c5fd"]); // the two band ink colours and the More link colour, all from the mockups
   });
 });
 
@@ -43,14 +43,22 @@ describe("card anatomy", () => {
     expect(tiles).toMatch(/const LABEL = "text-\[11px\] font-bold uppercase tracking-\[0\.08em\] text-muted-foreground";/);
     expect(tiles.match(/grid grid-cols-2 gap-x-4 gap-y-3/g)).toHaveLength(3);
   });
-  it("Profit rows are visible dim placeholders with the note in the label row; Refunds (Sales) is a dim placeholder with the tooltip; no More link", () => {
-    expect(tiles).toMatch(/data-testid=\{t\("profit-note"\)\}>\{PENDING_TOOLTIP\}<\/div>/);
-    expect(tiles).toMatch(/<Main label="Gross profit" value="—" dim/);
-    expect(tiles).toMatch(/<Sub label="Net profit" testId=\{t\("net-profit"\)\} dim>—<\/Sub>/);
-    expect(tiles).toMatch(/<Sub label="Est\. payout" testId=\{t\("est-payout"\)\} dim>—<\/Sub>/);
-    expect(tiles).toMatch(/<Sub label="Refunds" testId=\{t\("refunds"\)\} dim>—<\/Sub>/);
-    expect(tiles).toMatch(/title=\{dim \? PENDING_TOOLTIP : undefined\}/);
-    expect(tiles).not.toMatch(/>\s*More\b/);
+  // Finances API patch (commit 7, mockup docs/mockups/finances-breakdown-2026-11-19.html): the placeholders and the note are gone.
+  it("PROFIT: Net profit main, Gross profit · Est. payout · Margin · ROI, a More link; SALES Refunds reads '33 · $962.50'; no 'after the Finances API patch' note", () => {
+    expect(tiles).not.toMatch(/profit-note/);
+    expect(tiles).toMatch(/<Main label="Net profit" value=\{np\.main\} dim=\{np\.muted\}/);
+    expect(tiles).toMatch(/<Sub label="Gross profit" testId=\{t\("gross-profit"\)\} dim=\{gp\.muted\}>\{gp\.main\}<\/Sub>/);
+    expect(tiles).toMatch(/<Sub label="Est\. payout" testId=\{t\("est-payout"\)\} dim=\{ep\.muted\}>\{ep\.main\}<\/Sub>/);
+    expect(tiles).toMatch(/<Sub label="Margin"/); expect(tiles).toMatch(/<Sub label="ROI"/);
+    expect(tiles).toMatch(/onClick=\{\(\) => onMore\?\.\(col\)\} data-testid=\{t\("more"\)\}>More<\/button>/);
+    expect(tiles).toMatch(/<Sub label="Refunds" testId=\{t\("refunds"\)\} dim=\{rf\.muted\} title=\{rf\.tooltip\}>/);
+    const refunds = DASHBOARD_ROWS.find((r) => r.key === "refunds")!;
+    expect(cellText(refunds, { value: 33, secondary: 962.5 })).toEqual({ main: "33", small: "$962.50", tooltip: undefined });
+    expect(cellText(refunds, { value: null, pending: true })).toMatchObject({ main: "—", muted: true });
+    expect(cellText(DASHBOARD_ROWS.find((r) => r.key === "margin")!, { value: 10.48 })).toMatchObject({ main: "10.48%" });
+    expect(cellText(DASHBOARD_ROWS.find((r) => r.key === "net_profit")!, { value: 3538.12, dataFrom: "2024-11-19" })).toEqual({ main: "$3,538.12", muted: false, small: "data from Nov 19, 2024" });
+    expect(DASHBOARD_ROWS.filter((r) => r.group === "profit").map((r) => r.key)).toEqual(["net_profit", "gross_profit", "est_payout", "margin", "roi"]);
+    expect(DASHBOARD_ROWS.some((r) => r.pending)).toBe(false);
   });
   it("the SPEND 2 × 2: Refunds due (link when > 0), Avg. PO value with '· N POs', ASIN units, Individual units with the missing-pack-size note", () => {
     expect(tiles).toMatch(/<Sub label="Refunds due"[\s\S]*?<Link href=\{refundsDueHref\(col\)\}/);

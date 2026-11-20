@@ -1,29 +1,31 @@
 // Dashboard (SPEC §28) — the grid's row model and the API shapes, shared by
-// server/dashboard.ts and client/src/pages/dashboard.tsx. Row keys and the
-// API shape are final; the Finances API patch only supplies the numbers the
-// placeholder rows show "—" for today.
+// server/dashboard.ts and client/src/pages/dashboard.tsx. Since the Finances
+// API patch (commit 7, 2026-11-20) the SALES and PROFIT rows read
+// finances_daily through readBreakdown (server/finances-aggregate.ts): the
+// "—" placeholders and the "after the Finances API patch" note are gone.
 
 export type DashboardGroup = "spend" | "sales" | "profit";
 export type DashboardRowKey =
   | "spend" | "refunds_due" | "asin_units" | "individual_units" | "avg_po_value" | "write_offs" | "lost_damaged"
   | "sales" | "orders_units" | "refunds"
-  | "gross_profit" | "net_profit" | "est_payout";
+  | "gross_profit" | "net_profit" | "est_payout" | "margin" | "roi";
 
 export interface DashboardRowDef {
   key: DashboardRowKey;
   group: DashboardGroup;
   label: string;
-  /** money = $; int = whole units; pair = "orders / units". */
-  format: "money" | "int" | "pair";
+  /** money = $; int = whole units; pair = "orders / units"; count_money = "33 · $962.50"; pct = "10.48%". */
+  format: "money" | "int" | "pair" | "count_money" | "pct";
   /** The group's main metric (the larger weight, like a SellerBoard tile). */
   primary?: boolean;
-  /** Waits for the Finances API patch: "—" with the tooltip. */
+  /** Kept for the shape only (nothing is pending since commit 7). */
   pending?: boolean;
   /** SellerBoard's definition (shown as the row's tooltip). */
   definition: string;
 }
 
-export const PENDING_TOOLTIP = "after the Finances API patch";
+/** The hover text of a profit cell with no Finances data yet (before `npm run backfill:finances` has run). */
+export const PENDING_TOOLTIP = "no Finances data for this range yet — run backfill:finances";
 
 export const DASHBOARD_ROWS: readonly DashboardRowDef[] = [
   { key: "spend", group: "spend", label: "Spend", format: "money", primary: true, definition: "Σ per PO of order total − refunds (any status); a fully-canceled PO is $0; gift-card % and cashback never count" },
@@ -33,12 +35,14 @@ export const DASHBOARD_ROWS: readonly DashboardRowDef[] = [
   { key: "avg_po_value", group: "spend", label: "Avg. PO value", format: "money", definition: "Spend ÷ PO count (fully-canceled POs not counted)" },
   { key: "write_offs", group: "spend", label: "Supplier write-offs", format: "money", definition: "Σ written off on closed supplier claims (Write off: the $ owed; Write off remainder: what the refunds left) whose write-off date is in the range; a reopened claim leaves; never in Spend — click to open Claims › Closed, those write-offs" },
   { key: "lost_damaged", group: "spend", label: "Lost / damaged by us", format: "money", definition: "Σ Lost/damaged by us ASIN units × the row's cost per unit on POs ordered in the range (AF does not record when a unit was lost); never in Spend — click to open the POs with lost / damaged units" },
-  { key: "sales", group: "sales", label: "Sales", format: "money", primary: true, definition: "Σ revenue from the orders report (Pacific day)" },
-  { key: "orders_units", group: "sales", label: "Orders / ASIN units", format: "pair", definition: "Distinct Amazon order ids / Σ ASIN units sold (SellerBoard's Orders / Units)" },
-  { key: "refunds", group: "sales", label: "Refunds", format: "money", pending: true, definition: "Σ refund amount (ASIN units in small text) — Finances API" },
-  { key: "gross_profit", group: "profit", label: "Gross profit", format: "money", primary: true, pending: true, definition: "Sales − refunds − Amazon fees (referral, FBA, other) − promo / other Amazon charges" },
-  { key: "net_profit", group: "profit", label: "Net profit", format: "money", pending: true, definition: "Gross profit − COGS (actual COGS + prep for the ASIN units sold) − indirect expenses" },
-  { key: "est_payout", group: "profit", label: "Est. payout", format: "money", pending: true, definition: "Sales − refunds − Amazon fees (what Amazon pays out, before COGS)" },
+  { key: "sales", group: "sales", label: "Sales", format: "money", primary: true, definition: "Product principal net of promotion, by the order's Pacific purchase day (pending orders included, cancelled excluded; tax, shipping and shipping discounts out)" },
+  { key: "orders_units", group: "sales", label: "Orders / ASIN units", format: "pair", definition: "Distinct Amazon order ids / Σ ASIN units ordered (SellerBoard's Orders / Units)" },
+  { key: "refunds", group: "sales", label: "Refunds", format: "count_money", definition: "Refunds posted in the range (Pacific day) · the refunded amount" },
+  { key: "net_profit", group: "profit", label: "Net profit", format: "money", primary: true, definition: "Gross profit − indirect expenses ($0)" },
+  { key: "gross_profit", group: "profit", label: "Gross profit", format: "money", definition: "Sales + Refund cost + Amazon fees + Cost of goods (COGS, Prep, Disposal of sellable products, Lost/damaged by Amazon)" },
+  { key: "est_payout", group: "profit", label: "Est. payout", format: "money", definition: "Sales + Refund cost without Value of returned items + Amazon fees (cash only)" },
+  { key: "margin", group: "profit", label: "Margin", format: "pct", definition: "Net profit ÷ Sales" },
+  { key: "roi", group: "profit", label: "ROI", format: "pct", definition: "Net profit ÷ |Cost of goods|" },
 ];
 
 export interface Ymd { from: string; to: string }
@@ -52,7 +56,7 @@ export interface DashboardCell {
   poCount?: number;
   /** Individual units: rows that contributed their ASIN units because units_per_pack is NULL. */
   missingPackSize?: number;
-  /** Sales cells: the range starts before the earliest sale_date — data from this day only. */
+  /** Sales cells: the range starts before the earliest sale_date — data from this day only. Profit cells: before the first Finances day. */
   dataFrom?: string | null;
   /** Orders / Units: the units (value = orders); Lost / damaged by us: the ASIN units (value = $). */
   secondary?: number | null;
@@ -80,6 +84,8 @@ export interface DashboardCoverage {
   ordersFrom: string | null;
   /** sales_orders is still empty: `npm run backfill:sales` has not run since the Pacific switch (rows before its start day stay on the old basis — ordersFrom later than earliestSaleDate is the normal end state). */
   rebackfillPending: boolean;
+  /** Earliest finances_daily day with sales — null until `npm run backfill:finances` has run (Finances patch, commit 7). */
+  financesFrom?: string | null;
 }
 
 export interface DashboardGrid {

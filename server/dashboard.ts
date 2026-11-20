@@ -42,6 +42,7 @@ import type { QueryLike } from "./scheduler/types";
 import { LINE_YIELD_SQL } from "./po-queries";
 import { REFUNDS_DUE_PO_SQL, CLAIM_REMAINING_SQL, WRITTEN_OFF_CLAIM_COND, WRITTEN_OFF_ON_SQL } from "./supplier-claim-sql";
 import { resolveColumns, parseSet, parseCustom, parseYmd, last12MonthsRange, todayIn, EASTERN, PACIFIC, mondayOf, firstOfMonth, addDays, type RangeSet } from "./dashboard-range";
+import { loadProfitSettings, readBreakdown } from "./finances-aggregate";
 import { DASHBOARD_ROWS, SERIES_KINDS, type DashboardCell, type DashboardColumn, type DashboardCoverage, type DashboardGrid, type DashboardRowKey, type DashboardSeries, type SeriesKind, type SeriesPoint, type Ymd } from "@shared/dashboard";
 
 // ── SQL ──────────────────────────────────────────────────────────────────────
@@ -137,7 +138,8 @@ const ORDERS_GRID_SQL = `SELECT COUNT(DISTINCT amazon_order_id)::int AS orders F
 const COVERAGE_SQL = `SELECT (SELECT MIN(sale_date)::text FROM sales_daily) AS earliest,
            (SELECT MAX(sale_date)::text FROM sales_daily) AS newest,
            (SELECT MIN(sale_date)::text FROM sales_orders) AS orders_from,
-           (SELECT MAX(finished_at) FROM refresh_runs WHERE stage IN ('19_sales', 'sales')) AS last_sync`;
+           (SELECT MAX(finished_at) FROM refresh_runs WHERE stage IN ('19_sales', 'sales')) AS last_sync,
+           (SELECT MIN(day)::text FROM finances_daily WHERE line = 'sales') AS finances_from`;
 
 // ── Grid ─────────────────────────────────────────────────────────────────────
 
@@ -166,6 +168,7 @@ export async function loadCoverage(query: QueryLike): Promise<DashboardCoverage>
     // backfill; the header then says "orders from <date>" and the per-cell
     // dataFrom markers cover the columns that reach before it.
     rebackfillPending: earliest != null && ordersFrom == null,
+    financesFrom: r.finances_from ?? null,
   };
 }
 
@@ -173,6 +176,7 @@ export async function loadCoverage(query: QueryLike): Promise<DashboardCoverage>
 export async function loadGrid(query: QueryLike, set: RangeSet, custom: Ymd | undefined, now: Date = new Date()): Promise<DashboardGrid> {
   const columns = resolveColumns(set, now, custom);
   const coverage = await loadCoverage(query);
+  const settings = await loadProfitSettings(query as any);
   const out: DashboardColumn[] = [];
   // Spend for every column in one statement over the set's widest Eastern range.
   const minFrom = columns.map((c) => c.eastern.from).sort()[0], maxTo = columns.map((c) => c.eastern.to).sort().slice(-1)[0];
@@ -183,11 +187,16 @@ export async function loadGrid(query: QueryLike, set: RangeSet, custom: Ymd | un
       write_offs: spendRow[`write_offs_${i}`], write_off_claims: spendRow[`write_off_claims_${i}`], write_offs_by_kind: spendRow[`write_offs_by_kind_${i}`], lost: spendRow[`lost_${i}`], lost_units: spendRow[`lost_units_${i}`], lost_pos: spendRow[`lost_pos_${i}`] };
     const sa = (await query(SALES_GRID_SQL, [c.pacific.from, c.pacific.to])).rows[0] ?? {};
     const so = (await query(ORDERS_GRID_SQL, [c.pacific.from, c.pacific.to])).rows[0] ?? {};
+    // SALES / PROFIT from the Finances aggregate (patch commit 7); sales_daily / sales_orders stay the source only while
+    // finances_daily has nothing for the column (before backfill:finances), so the tiles never go blank.
+    const b = await readBreakdown(c.pacific.from, c.pacific.to, null, query as any, settings);
+    const hasFin = b.totals.units > 0 || b.totals.sales !== 0;
     const poCount = num(sp.po_count);
     const spend = round2(num(sp.spend));
     const dataFrom = coverage.earliestSaleDate && c.pacific.from < coverage.earliestSaleDate ? coverage.earliestSaleDate : null;
     const ordersFrom = coverage.ordersFrom && c.pacific.from < coverage.ordersFrom ? coverage.ordersFrom : coverage.ordersFrom == null ? null : dataFrom;
-    const pending: DashboardCell = { value: null, pending: true };
+    const finFrom = coverage.financesFrom && c.pacific.from < coverage.financesFrom ? coverage.financesFrom : null;
+    const profit = (v: number | null): DashboardCell => (hasFin ? { value: v, dataFrom: finFrom } : { value: null, pending: true });
     const cells: Record<DashboardRowKey, DashboardCell> = {
       spend: { value: spend },
       refunds_due: { value: round2(num(sp.refunds_due)) },
@@ -196,12 +205,16 @@ export async function loadGrid(query: QueryLike, set: RangeSet, custom: Ymd | un
       avg_po_value: { value: poCount > 0 ? round2(spend / poCount) : null, poCount },
       write_offs: { value: round2(num(sp.write_offs)), claimCount: num(sp.write_off_claims), byKind: byKindOf(sp.write_offs_by_kind) },
       lost_damaged: { value: round2(num(sp.lost)), secondary: round2(num(sp.lost_units)), poCount: num(sp.lost_pos) },
-      sales: { value: round2(num(sa.sales)), dataFrom },
-      orders_units: { value: coverage.ordersFrom == null ? null : num(so.orders), secondary: num(sa.units), dataFrom: ordersFrom },
-      refunds: { ...pending, secondary: null },
-      gross_profit: pending,
-      net_profit: pending,
-      est_payout: pending,
+      sales: { value: hasFin ? b.totals.sales : round2(num(sa.sales)), dataFrom: hasFin ? finFrom : dataFrom },
+      orders_units: hasFin
+        ? { value: b.totals.orders, secondary: b.totals.units, dataFrom: finFrom }
+        : { value: coverage.ordersFrom == null ? null : num(so.orders), secondary: num(sa.units), dataFrom: ordersFrom },
+      refunds: hasFin ? { value: b.totals.refunds, secondary: round2(-(b.lines.find((l) => l.line === "refund_amount")?.amount ?? 0)), dataFrom: finFrom } : { value: null, pending: true, secondary: null },
+      gross_profit: profit(b.totals.grossProfit),
+      net_profit: profit(b.totals.netProfit),
+      est_payout: profit(b.totals.estPayout),
+      margin: profit(b.totals.margin),
+      roi: profit(b.totals.roi),
     };
     out.push({ key: c.key, label: c.label, eastern: c.eastern, pacific: c.pacific, cells });
   }

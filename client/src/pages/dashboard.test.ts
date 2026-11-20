@@ -32,12 +32,14 @@ describe("the page never touches the global date range and keeps quiet chrome", 
     expect(coverageTooltip({ ...cov, ordersFrom: null, rebackfillPending: true })).toMatch(/Orders not loaded yet — run backfill:sales/);
     expect(coverageTooltip(null)).toBe("");
   });
-  it("the tiles replaced the grid: placeholders with the tooltip, Refunds due linked only when > 0", () => {
-    expect(page).toMatch(/<MetricTiles grid=\{grid\} loading=\{loading\} \/>/);
+  it("the tiles replaced the grid: a profit cell with no Finances data yet is a dim '—' with the tooltip, Refunds due linked only when > 0; More opens the breakdown panel (Finances patch commit 7)", () => {
+    expect(page).toMatch(/<MetricTiles grid=\{grid\} loading=\{loading\} onMore=\{setMore\} \/>/);
+    expect(page).toMatch(/<FinancesBreakdownPanel title=\{more\.label\} subtitle=\{fmtRangeLabel\(more\.pacific\.from, more\.pacific\.to\)\} from=\{more\.pacific\.from\} to=\{more\.pacific\.to\} onClose=/);
     expect(page).not.toMatch(/MetricGrid/);
     expect(tiles).toMatch(/\(c\.refunds_due\.value \?\? 0\) > 0\s*\? <Link href=\{refundsDueHref\(col\)\}/);
     expect(cellText(row("gross_profit"), { value: null, pending: true })).toEqual({ main: "—", tooltip: PENDING_TOOLTIP, muted: true });
-    expect(cellText(row("refunds"), { value: null, pending: true, secondary: null }).tooltip).toBe("after the Finances API patch");
+    expect(cellText(row("refunds"), { value: null, pending: true, secondary: null }).tooltip).toBe(PENDING_TOOLTIP);
+    expect(PENDING_TOOLTIP).not.toMatch(/after the Finances API patch/);
   });
 });
 

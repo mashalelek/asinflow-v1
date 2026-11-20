@@ -3,6 +3,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes, getOnboardScDiscoveries, getSyncAsinCostsFromPos, getOnboardSalesAsins } from "./routes";
 import { createJobsRouter } from "./scheduler/routes";
 import { createDashboardRouter } from "./dashboard";
+import { createFinancesRouter } from "./finances-routes";
 import { createKeepaRouter } from "./keepa-trends";
 import { createListingHygieneRouter } from "./listing-hygiene-routes";
 import { createTrackingRouter } from "./tracking-routes";
@@ -198,6 +199,7 @@ if (!process.env.VITEST) (async () => {
   app.use(createTrackingRouter());
   // Dashboard (SPEC §28): the Spend · Sales · Profit grid and the chart series — read-only.
   app.use(createDashboardRouter());
+  app.use(createFinancesRouter());
   // Keepa trend columns (docs/claude_spec-patch-keepa-trends.md "API", 2026-11-18): bucketed trends for the rows on screen and one ASIN's daily history — read-only.
   app.use(createKeepaRouter());
   // PO documents (SPEC §22): the renderer probe — admin-only, and once per deploy after boot.

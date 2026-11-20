@@ -72,7 +72,10 @@ export function cellText(row: DashboardRowDef, cell: DashboardCell): CellText {
       ? { main: `— / ${fmtInt(cell.secondary)}`, small: "orders after the re-backfill", muted: true }
       : { main: `${fmtInt(cell.value)} / ${fmtInt(cell.secondary)}`, small: dataFrom };
     case "sales": return { main: fmtMoney(cell.value), small: dataFrom };
-    case "refunds": return { main: fmtMoney(cell.value), small: cell.secondary != null ? `${fmtInt(cell.secondary)} ASIN units` : undefined };
+    // Finances patch (commit 7, mockup finances-breakdown-2026-11-19): "33 · $962.50" — the count, the refunded amount beside it
+    case "refunds": return { main: fmtInt(cell.value), small: cell.secondary != null ? fmtMoney(cell.secondary) : undefined, tooltip: dataFrom };
+    case "margin": case "roi": return { main: cell.value == null ? "—" : `${cell.value.toFixed(2)}%`, muted: cell.value == null, tooltip: dataFrom };
+    case "gross_profit": case "net_profit": case "est_payout": return { main: fmtMoney(cell.value), muted: cell.value == null, small: dataFrom };
     // §3.14: "$58.40 · 3 claims", the split by kind on hover; "$0.00" dim with nothing in the range (row 7)
     case "write_offs": return (cell.value ?? 0) > 0
       ? { main: fmtMoney(cell.value), small: `${cell.claimCount ?? 0} claim${cell.claimCount === 1 ? "" : "s"}`, tooltip: writeOffsSplit(cell.byKind) || undefined }

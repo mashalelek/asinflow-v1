@@ -12,6 +12,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { MetricTiles } from "@/components/metric-tiles";
+import { FinancesBreakdownPanel } from "@/components/finances-breakdown";
+import { fmtRangeLabel } from "@/components/metric-grid";
+import type { DashboardColumn } from "@shared/dashboard";
 import { DashboardCharts } from "@/components/dashboard-charts";
 import { SET_COLUMN_LABELS, type RangeSetKey } from "@/lib/dashboard-sets";
 import type { DashboardGrid } from "@shared/dashboard";
@@ -33,6 +36,8 @@ export default function Dashboard() {
   const [grid, setGrid] = useState<DashboardGrid | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // "More" on a tile (Finances patch commit 7): the breakdown panel for that tile's Pacific range.
+  const [more, setMore] = useState<DashboardColumn | null>(null);
 
   const load = useCallback(async () => {
     if (set === 4 && !(custom.from && custom.to && custom.from <= custom.to)) return;
@@ -80,7 +85,8 @@ export default function Dashboard() {
           Couldn't load the grid: {error}. <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void load()}>Retry</Button>
         </div>
       )}
-      <MetricTiles grid={grid} loading={loading} />
+      <MetricTiles grid={grid} loading={loading} onMore={setMore} />
+      {more && <FinancesBreakdownPanel title={more.label} subtitle={fmtRangeLabel(more.pacific.from, more.pacific.to)} from={more.pacific.from} to={more.pacific.to} onClose={() => setMore(null)} />}
       <DashboardCharts />
     </div>
   );
