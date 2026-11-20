@@ -57,7 +57,7 @@ vi.mock("./db", () => ({
   default: { connect: async () => ({ query: (text: string, params?: any[]) => mockQuery(text, params), release: () => {} }) },
 }));
 
-import { syncSalesData, parseOrdersReport, parseOrdersReportAll, buildDateChunks, salesTiming, salesDb, SalesSyncError, MAX_RANGE_DAYS, pacificDay, pacificToUtc, reportWindowUtc, tzOffsetMinutes } from "./sales-sync";
+import { syncSalesData, parseOrdersReport, parseOrdersReportAll, mergeOrderLines, buildDateChunks, salesTiming, salesDb, SalesSyncError, MAX_RANGE_DAYS, pacificDay, pacificToUtc, reportWindowUtc, tzOffsetMinutes } from "./sales-sync";
 
 const HEADER = "amazon-order-id\tpurchase-date\torder-status\tasin\tquantity\titem-price";
 // 15:00 UTC = 08:00 Pacific (PDT) / 07:00 (PST): the Pacific day equals the date given.
@@ -305,6 +305,11 @@ describe("sales from the order's Finances row (SPEC §2), the per-order store", 
     expect(ins()).toEqual([["id-A", "2026-06-01", 1, 10]]);
     expect(lines().map((p) => [p[0], p[5], p[6]])).toEqual([["o4", "Cancelled", 1], ["o5", "Cancelled", 1], ["o6", "Shipped", 1]]);
     expect(sql.some((q) => q.text.startsWith("DELETE FROM finances_order_lines"))).toBe(true);
+  });
+  it("two report lines of one order and SKU (one Shipped, one Pending) become ONE per-order line: units and price summed, status Shipped; two cancelled parts stay one Cancelled line", () => {
+    const L = rep(r2("o7", "Pending", "Shipped", "SKU-A", "A000000001", 1, "25.96"), r2("o7", "Pending", "Pending", "SKU-A", "A000000001", 1, ""), r2("o8", "Cancelled", "Cancelled", "SKU-A", "A000000001", 1, "5"), r2("o8", "Cancelled", "Cancelled", "SKU-A", "A000000001", 2, "10")).split("\n").filter(Boolean);
+    const m = mergeOrderLines(parseOrdersReportAll(L));
+    expect(m.map((l) => [l.orderId, l.qty, l.price, l.cancelled, l.status])).toEqual([["o7", 2, 25.96, false, "Pending"], ["o8", 3, 5, true, "Cancelled"]]);
   });
   it("parseOrdersReportAll keeps every line and marks the cancelled ones; parseOrdersReport drops them", () => {
     const L = rep(r2("o4", "Cancelled", "Cancelled", "S", "A000000001", 1, "10"), r2("o6", "Shipped", "Shipped", "S", "A000000001", 1, "10")).split("\n").filter(Boolean);

@@ -312,7 +312,7 @@ async function fetchChunk(
   const parsed = allLines.filter((l) => !l.cancelled);
   // An explicit selection writes (and clears) only its own ASINs' order lines.
   const scopeAsins = scopeAsinIds ? Array.from(asinIdMap.keys()) : null;
-  const orderLineRows = allLines.filter((l) => l.orderId && l.sku && ASIN_RE.test(l.asin) && (!scopeAsins || asinIdMap.has(l.asin)));
+  const orderLineRows = mergeOrderLines(allLines.filter((l) => l.orderId && l.sku && ASIN_RE.test(l.asin) && (!scopeAsins || asinIdMap.has(l.asin))));
   if (parsed.length === 0) {
     await replaceWindow(startDate, endDate, scopeAsinIds, [], [], orderLineRows, scopeAsins);
     return { chunk: emptyChunk, dates: new Set<string>(), asins: new Set<string>() };
@@ -477,6 +477,28 @@ export async function loadLastUnitPrice(asins: string[]): Promise<Map<string, nu
   );
   for (const row of r.rows ?? []) if (row.unit != null) m.set(String(row.asin), Number(row.unit));
   return m;
+}
+
+
+/**
+ * Pure: the report lists one line per order ITEM, so an order with the same SKU shipped and still pending (111-6121270-0403440:
+ * one unit Shipped at 25.96, one Pending) has two lines under one (order id, SKU). The per-order store keys on that pair:
+ * units, price and promotion are summed; the line is Cancelled only when every part is; the status is the first live part's.
+ */
+export function mergeOrderLines(lines: readonly OrderLine[]): OrderLine[] {
+  const by = new Map<string, OrderLine>();
+  for (const l of lines) {
+    const k = `${l.orderId}|${l.sku}`;
+    const m = by.get(k);
+    if (!m) { by.set(k, { ...l }); continue; }
+    if (l.cancelled && m.cancelled) { m.qty += l.qty; continue; }
+    if (m.cancelled && !l.cancelled) { by.set(k, { ...l }); continue; }
+    if (l.cancelled) continue;
+    m.qty += l.qty; m.price += l.price; m.promo += l.promo;
+    if (m.status !== "Shipped" && l.status === "Shipped") m.status = l.status;
+    if (l.purchaseAt < m.purchaseAt) { m.purchaseAt = l.purchaseAt; m.date = l.date; }
+  }
+  return Array.from(by.values());
 }
 
 /** Pure: TSV lines (header first) → non-cancelled order lines, dated by the Pacific day. Exported for tests. */

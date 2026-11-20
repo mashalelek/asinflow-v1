@@ -94,12 +94,20 @@ export async function rebuildFinancesDaily(from: string, to: string, opts: { liv
          WHERE t.transaction_type = 'Shipment' AND t.transaction_status = 'RELEASED' AND t.superseded_at IS NULL AND l.quantity > 0 AND l.line IN ('sales', 'fba_fee', 'referral_fee')
            AND l.asin IN (SELECT DISTINCT asin FROM finances_order_lines WHERE purchase_day BETWEEN $1::date AND $2::date)
          ORDER BY l.asin, l.posted_at DESC),
+      -- a live shipment transaction with NO money at all (a $0 replacement shipment Amazon posts with empty items): the order has
+      -- its row, it is just worth nothing — never priced or fee-estimated as "no row yet"
+      zero_tx AS (
+        SELECT DISTINCT t.order_id FROM finances_transactions t
+         WHERE t.transaction_type = 'Shipment' AND t.superseded_at IS NULL AND t.total_amount = 0
+           AND t.order_id IN (SELECT order_id FROM finances_order_lines WHERE purchase_day BETWEEN $1::date AND $2::date)
+           AND NOT EXISTS (SELECT 1 FROM finances_lines l WHERE l.transaction_id = t.transaction_id)),
       lines AS (
         SELECT ol.purchase_day AS day, ol.asin, ol.order_id,
                -- units ordered, or the units Amazon shipped when more (a free replacement shipment under the same order id)
                GREATEST(ol.units, COALESCE(f.quantity, 0)) AS units,
-               f.order_id IS NOT NULL AS has_row, COALESCE(f.any_deferred, false) AS any_deferred, COALESCE(f.quantity, 0) AS fin_qty,
-               GREATEST(ol.units - COALESCE(f.quantity, 0), 0) AS rest_units,
+               (f.order_id IS NOT NULL OR z.order_id IS NOT NULL) AS has_row, COALESCE(f.any_deferred, false) AS any_deferred,
+               CASE WHEN f.order_id IS NULL AND z.order_id IS NOT NULL THEN ol.units ELSE COALESCE(f.quantity, 0) END AS fin_qty,
+               CASE WHEN f.order_id IS NULL AND z.order_id IS NOT NULL THEN 0 ELSE GREATEST(ol.units - COALESCE(f.quantity, 0), 0) END AS rest_units,
                COALESCE(NULLIF(ol.item_price, 0) / NULLIF(ol.units, 0), lp.unit_price, e.lowest_fba_price, 0) AS unit_price,
                COALESCE(f.principal, 0) + COALESCE(f.promo, 0) AS fin_sales,
                COALESCE(f.fba_fee, 0) AS fin_fba, COALESCE(f.referral_fee, 0) AS fin_ref, COALESCE(f.vcf, 0) AS fin_vcf, COALESCE(f.other_fee, 0) AS fin_other,
@@ -110,6 +118,7 @@ export async function rebuildFinancesDaily(from: string, to: string, opts: { liv
                cp.cost_per_unit, cp.ships_to, COALESCE(h.hazmat, false) AS hazmat
           FROM finances_order_lines ol
           LEFT JOIN fin f ON f.order_id = ol.order_id AND f.sku = ol.sku
+          LEFT JOIN zero_tx z ON z.order_id = ol.order_id
           LEFT JOIN last_posted lp ON lp.asin = ol.asin
           LEFT JOIN asin_estimates e ON e.asin = ol.asin
           LEFT JOIN fin_periods cp ON cp.asin = ol.asin AND ol.purchase_day BETWEEN cp.from_day AND cp.to_day
