@@ -32,40 +32,29 @@ The two are never blended. Filters and views must use one or the other, never
 a hybrid metric. (Past hybrids like "current price + actual COGS + estimated
 fees" are explicitly forbidden.)
 
-### ⚠️ Critical caveat: Actual P&L is broken
+### Actuals: Amazon's money records (Finances API patch, 2026-11-20)
 
-AsinFlow's Actual profit/margin/ROI are seriously inaccurate today. Per a
-side-by-side comparison with SellerBoard for ASIN B07P7Y5J8H (Kar's Nuts)
-over the same period:
+Every Actual figure in AF — the Dashboard's SALES / PROFIT tiles and the
+More panel, the Actual columns on the ASINs, Repricer and Analytics tables,
+the CSV export, the ASIN panel — reads ONE store, `finances_daily`, built
+from Amazon's own money records (Finances API v2024-06-19
+`listTransactions`) plus three reports (customer returns, monthly storage
+fees, removal order detail) and the PO tables. The model is SellerBoard's,
+line for line (`docs/claude_finances-sb-fixture.md` is the answer key;
+`docs/claude_spec-patch-finances-api.md` §1 the formulas; §11 "Finances
+(components 19–21)" the mechanics; §13 what still differs from SB and why).
+The old "Actual P&L is broken" caveat (a 90× understatement on B07P7Y5J8H)
+described the pre-patch client math — estimated fees against actual
+revenue — and no longer applies; `docs/finances-probe-2026-11-18.md` has the
+diagnosis and the fixture reconciliations (August 2026 to the cent on every
+Finances line, B0756KB8N1 Oct 19 – Nov 17 to the cent on sales, units,
+refunds and both fee lines).
 
-| Metric | SellerBoard | AsinFlow | Direction |
-|---|---|---|---|
-| Sales | $777.05 | $777.05 | ✅ matches |
-| Refunds | 8 | 0 | ❌ missing |
-| Refund $ | -$121.98 | not captured | ❌ missing |
-| **Net profit** | **$77.62** | **$0.86** | ❌ ~90× too low |
-| **Margin** | **9.99%** | **0.1%** | ❌ off by ~100× |
-| **ROI** | **26.95%** | **0.3%** | ❌ off by ~90× |
-
-The direction of the error is *understating* profit, which suggests costs
-are being overstated somewhere — possibly double-counted fees, mismatched
-unit counts, or fees from outside the period being subtracted.
-
-Other known gaps in the Actual P&L data path:
-
-- **Refunds** — not ingested from SP-API. Always shows 0.
-- **Amazon fees (FBA, referral, other)** — `actual_fba_fees`,
-  `actual_referral_fees`, `actual_other_fees` columns exist in `sales_daily`
-  but are populated by the fee engine (estimates), not by Amazon's Finances
-  API. Their contents are unverified.
-- **Inbound shipping** — currently estimated, not actual.
-- **Unit count drift** — minor (1–2 unit) discrepancies in some rows.
-
-Until the audit lands: AsinFlow's Actual profit / margin / ROI are NOT
-authoritative. Use SellerBoard for real P&L decisions. AsinFlow's Estimated
-metrics are still useful for sourcing and replenishment.
-
-This is a critical gap and warrants a dedicated session. See Section 13.
+History starts 2024-11-19 (Amazon keeps 730 days of transactions; the
+horizon moves a day per day). A range that starts earlier shows "data from
+<date>" on the profit cells. Until `npm run backfill:finances` has covered a
+range, the tiles show a dim "—" for the profit rows and the tables fall back
+to the estimated-fee math.
 
 ### Date range
 
@@ -674,6 +663,17 @@ are read against it.) Render plain `0` / `$0.00` in NORMAL text, styled
 identically to any other number — no muted colour, no indicator, no
 "no data" tooltip. No exceptions.
 
+**Since the Finances API patch (2026-11-20)** the event-derived Actual
+columns read the Finances facts for the page's range through one accessor
+(`readAsinActuals`, `server/finances-aggregate.ts`; `actuals.fin` on the row):
+Units Sold and Revenue are §28's Sales / Units (the order's own Finances row,
+pending orders included, cancelled and S01- orders excluded), Refunds is the
+refund count by posted day, and Total Profit / Profit/Unit / ROI / Margin are
+the range's Net profit from the same facts as the breakdown panel — the
+Actual Profit cell opens that panel for the ASIN. Before the backfill has
+covered the range the pre-patch estimate (fees from `asin_estimates` against
+actual revenue) still answers, so a column is never blank.
+
 **B. PO-sheet-derived** — looked up from PO records: **Actual COGS** and
 **Actual Prep Cost**. Absence means "no PO record found" — genuinely
 unknown, possibly an unmapped sale or a missing row. Render `$0.00` in
@@ -1052,7 +1052,22 @@ global defaults:
 - Other operational defaults
 
 Settings values are read by the calculation engine and apply to all Estimated
-metrics across the app.
+metrics across the app — and, since the Finances API patch (2026-11-20), to
+the Actual Prep line (§11 "Finances"): a unit sold from a Velocity PO takes
+the Prep cost, a hazmat ASIN the Prep cost + the DG/Hazmat prep surcharge, a
+Home PO $0.
+
+**Stored in the database (Finances patch commit 1, migration 122).** Every
+field of the profit Settings is a `settings` row (`shared/settings-keys.ts`
+maps the field to the key: `prep_cost`, `hazmat_prep_surcharge`,
+`inbound_shipping_per_lb`, `additional_fees`, `low_inventory_surcharge`,
+`hazmat_ship_surcharge`, `min_roi`, `min_margin`, `min_profit_unit`,
+`max_cogs_min_margin_pct`, `max_cogs_min_roi_pct`,
+`max_cogs_min_profit_unit`); `GET` / `PUT /api/settings/profit` read and save
+them, every page loads them once (`useProfitSettings`) and the Settings
+dialog writes them — a value Maria saves shows in every browser. The
+browser's `fba-analyzer-settings` copy is removed on first load and is no
+longer a source.
 
 ---
 
@@ -2292,6 +2307,7 @@ arbitrary-ASIN price pulls is **getItemOffersBatch: 20 ASINs/call at
 | getListingsItem / putListingsItem / searchListingsItems / getListingsRestrictions | 5 | 10 | 1 |
 | getInventorySummaries | 2 | 2 | page |
 | getItemEligibilityPreview | 1 | 1 | 1 |
+| listTransactions (Finances 2024-06-19; `x-amzn-RateLimit-Limit` 0.5 both versions, probe 2026-11-18) | 0.5 | 10 | 500 transactions / page |
 | createReport / getReportDocument | 0.0167 | 15 | — |
 | getReport | 2 | 15 | — |
 
@@ -2375,9 +2391,9 @@ the ledger stage is the `refresh_runs.stage` key the component writes.
 | 16 | Live offer / buyable / issues (§18 reconcile) + listing state per SKU (`asin_skus.listing_created_at` / `offer_end_at` / `listing_checked_at`, 2026-10-18) | hourly | CALL-9 getListingsItem, per SKU, `includedData` + `attributes` | `16_live_offer` | active+parked |
 | 17 | Primary SKU | hourly | derived from 15–16 | `17_primary_sku` | " |
 | 18 | Suppressions (FYP) | hourly | CALL-10 FYP report | `18_suppressions` | account |
-| 19 | Sales units / revenue (+ `sales_orders`, Pacific day — 2026-11-03) | hourly | CALL-11 (today: orders report, 48-hour window requested with Pacific day bounds; `params.sales_window` for the backfill) | `19_sales` | account — every ASIN in `asins`, all statuses (2026-10-16) |
-| 20 | Refunds | hourly | rides CALL-11 | `20_refunds` | " |
-| 21 | Actual fees charged | hourly | rides CALL-11 | `21_actual_fees` | " |
+| 19 | Sales units / revenue (+ `sales_orders`, `finances_order_lines`; Pacific day) | hourly | CALL-11 orders report, **30-day trailing window** (Finances patch, 2026-11-20: a cancellation weeks later must drop out); `params.sales_window` for the backfill | `19_sales` | account — every ASIN in `asins`, all statuses (2026-10-16) |
+| 20 | Refunds — the Finances pull (`finances_transactions` / `finances_lines`) | hourly | CALL-14 Finances `listTransactions`, posted window: 3 days hourly, 60 at 00:00, `params.finances_window` by week for the backfill (one pull serves 20 and 21) | `20_refunds` | account |
+| 21 | Actual fees and every other Finances line (`finances_daily`) | hourly | rides 20; 00:00 adds the customer returns, storage fee and removal order reports; rebuilds the trailing 60 days (120 at 00:00) | `21_actual_fees` | account |
 | 22 | Close OOS listings (listing hygiene, 2026-10-18; daily since 2026-10-20) | daily | CALL-12 `patchListingsItem`, per SKU | `22_close_oos` | every SKU 15/16 observed; **00:00 pass only**, before 24 |
 | 23 | Inventory Ledger (`sku_ledger_state`) | daily | CALL-13 `GET_LEDGER_SUMMARY_VIEW_DATA` (DAILY, COUNTRY); `params.ledger_window` for the backfill | `23_ledger` | account |
 | 24 | Delete long-dead listings (listing hygiene) | daily | CALL-14 `deleteListingsItem`, per SKU + Velocity `/inbound` + `/inventory` | `24_delete_dead` | every closed SKU; **00:00 pass only** |
@@ -2563,11 +2579,108 @@ Three components are ledger-only in this version, by decision:
   there are no `est_*` columns. Its ledger row counts the ASINs whose
   inputs are complete (price, fee triple, COGS) vs `incomplete` /
   `missing_row` — the number the Profitable scorecard can trust.
-- **20 and 21 record `skipped`** until the Finances API patch lands; 19
-  runs against the current source (orders flat-file report). The scheduler
-  calls one `syncSales(scope, window)`; the Finances patch swaps the
-  implementation, not the schedule. The hourly window is the last 48 hours
-  (overlap on purpose; the upsert is idempotent).
+- **19, 20 and 21 run for real since the Finances API patch (2026-11-20)**;
+  see "Finances (components 19–21)" below. 19's hourly window is the last
+  30 days (overlap on purpose; the window is deleted and reloaded).
+
+### Finances (components 19–21, 2026-11-20)
+
+Patch `docs/claude_spec-patch-finances-api.md`; probe
+`docs/finances-probe-2026-11-18.md` and `docs/finances-probe-commit0.md`;
+answer keys `docs/claude_finances-sb-fixture.md`; acceptance
+`docs/claude_finances-acceptance-2026-11-20.md`; migrations 122–124.
+
+- **Source.** `server/finances.ts` is the ONLY module that calls `/finances/`:
+  `GET /finances/2024-06-19/transactions` (500 per page, `nextToken` resent
+  with the window and `marketplaceId`, 0.5 rps). A window is read in full,
+  then stored in one transaction (fail-closed): every transaction upserted
+  by `transactionId` into `finances_transactions`, its breakdown leaves into
+  `finances_lines` classified into SB's lines (`shared/finances.ts`
+  `classifyLeaf`: `sales`, `promo`, `shipping`, `tax`, `fba_fee`,
+  `referral_fee`, `vcf`, `fee:<Type>`; refunds `refund_amount`,
+  `refund_commission`, `refunded_referral`, `restocking`, `refund_vcf`;
+  `svc:<Type>` per ServiceFee; `reimb:<REASON>` per reimbursement item;
+  `other:<Type>`). A `DEFERRED_RELEASED` row (the copy Amazon leaves when it
+  releases a deferred transaction — the same `transactionId`) is never
+  stored: it, and a RELEASED row's `DEFERRED_TRANSACTION_ID`, marks the
+  stored DEFERRED row `superseded_at`. Every reader takes the live state per
+  natural key — (order id, shipment id, SKU) for shipments, (order id,
+  refund id, SKU) for refunds — RELEASED over DEFERRED
+  (`server/finances-sql.ts`), so nothing is counted twice and `transactionId`
+  is never a key. A $0 principal leaf is kept (a free replacement shipment
+  still leaves a row); other $0 leaves are dropped. Disbursements
+  (`Transfer`) are stored with their settlement id and shown nowhere yet.
+- **Sales (19).** The orders report (30-day chunks) writes every line,
+  cancelled included, to `finances_order_lines` (order id, SKU, ASIN,
+  Pacific purchase day, status, units, item price, promotion) and
+  `sales_daily` / `sales_orders` as before — but revenue is the order's own
+  Finances row (principal − promotion) for the units it covers plus the
+  report price for the rest (a Pending order, an unshipped unit), never a
+  day average; a Pending line with no price takes the ASIN's last Finances
+  unit price. An order Amazon reports Cancelled leaves Sales / Units / Orders
+  on its day whenever that happens (the 30-day re-read).
+- **The aggregate (21).** `rebuildFinancesDaily(from, to)`
+  (`server/finances-aggregate.ts`) recomputes `finances_daily` — one row per
+  Pacific day × ASIN × line (`asin = ''` = the account-only part) — in one
+  transaction: Sales / Units / Orders and the fee lines by purchase day
+  (units = the units ordered, or the units Amazon shipped when more — a
+  replacement shipment under the same order id; S01- orders out); a line
+  without a posted row takes the DEFERRED row's own fees, else the same
+  ASIN's most recent posted per-unit FBA fee and commission rate × its
+  price, else AF's fee estimate — the estimated part kept in `est_amount` /
+  `est_units` for the hover text; refunds by posted day; service fees by
+  posted day with §4's allocations (an inbound transportation or inbound
+  convenience row split over its FBA shipment's contents by weight — qty ×
+  `asins.weight_lb`, the weighting commit 0 fixed at −95.73 against SB's
+  −95.66; a shipment `sc_inbound_shipments` lacks is read live first; the
+  storage row split by the storage fee report of the month before its
+  posting; removal / disposal rows by their removal order's SKUs; the
+  customer-return fee on its order's ASIN; Subscription and the unallocated
+  remainder account-only); reimbursements as cash lines per reason, plus
+  **Lost/damaged by Amazon** valued (WAREHOUSE_LOST / WAREHOUSE_DAMAGE /
+  MISSING_FROM_INBOUND = −units × (COGS + Prep), COMPENSATED_CLAWBACK /
+  MISSING_FROM_INBOUND_CLAWBACK = +units × (COGS + Prep), other reasons
+  nothing); **Value of returned items** = SELLABLE returned units × (COGS +
+  Prep) by return day, with the counts behind Sellable returns; **Disposal
+  of sellable products** = Disposal removal orders' sellable disposed units ×
+  (COGS + Prep) by completion day; `other:` rows account-level. **COGS by
+  cost period:** the newest non-canceled, non-components-only `po_asins`
+  row with `order_date` ≤ the day (then entry sequence; `COST_PERIODS_SQL`),
+  a sale before the first PO at the first PO, no PO at all = $0 and
+  `cogs_missing` units. **Prep is never stored as money:** the aggregate
+  keeps the units that take the Settings prep — a Velocity PO in force, with
+  hazmat separate — in `prep_units` / `prep_hazmat_units`, and
+  `readBreakdown` applies the current Settings values (a Home PO's unit
+  takes none; `po_asins.prep_cost` is not read). `sales_daily.units_refunded`
+  / `refund_amount` follow the aggregate; the three `actual_*` fee columns
+  are gone (migration 124).
+- **Reports (21 at 00:00; `server/finances-reports.ts`).**
+  `GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA` and
+  `GET_FBA_FULFILLMENT_REMOVAL_ORDER_DETAIL_DATA` for the trailing 60 days
+  (≤ 60-day requests, the end clamped to now — a future `dataEndTime` ends
+  the report FATAL), `GET_FBA_STORAGE_FEE_CHARGES_DATA` for every month whose
+  row can have posted in the range; rows stored as received in
+  `fba_customer_returns`, `fba_removals` (upserts) and `fba_storage_fees`
+  (the month replaced).
+- **Passes.** Hourly: 19 (30 days), 20 (3 posted days), 21 (rebuild 60
+  days). 00:00: 20 (60 posted days), 21 (the three reports, rebuild 120
+  days). Backfill: `npm run backfill:finances [-- --from --to --prod]` /
+  `POST /api/jobs/backfill-finances` — ONE manual job with 19 + 20 + 21 over
+  the window (`params.sales_window`, `finances_window`, `finances_reports`),
+  weekly Finances windows with progress "week n/N", every window logged in
+  `finances_ingest_log`; default from the earliest day Amazon still answers
+  for (`retentionStart`). Idempotent. A report failure is a failed step
+  (`error:` outcome); the rebuild still runs.
+- **Reads.** `GET /api/finances/breakdown?from&to[&asin]` → the §1 breakdown
+  (`FinancesBreakdown`: SB's lines in SB's order and groups, totals, the
+  ratios, `dataFrom`); `GET /api/finances/asin-actuals?from&to[&asins]` → the
+  per-ASIN Actuals every table reads; the Dashboard grid reads
+  `readBreakdown` per column. Estimated payout = Sales + Refund cost without
+  Value of returned items + Amazon fees (cash only, every surface).
+- **Tests** never call Amazon: recorded pages and TSVs under
+  `server/__fixtures__/finances/`; the ingest, the report stores and the
+  aggregate also run on the real schema, rolled back
+  (`finances*.db.test.ts`).
 
   **Sales scope and onboarding (2026-10-16).** The report is account-wide,
   so component 19 matches its rows against **every** row in `asins` —
@@ -2879,7 +2992,7 @@ held two manual dry runs for stale inputs; 16 Live offer skipped 2 ASINs as tran
   from the ledger, `refresh_runs`; no table of its own). Listed on the job — "25 ASINs without fees" with the ASINs and
   their errors — and not counted; an ASIN leaves the list as soon as it succeeds (its streak breaks).
 - **Not failures:** bad data (10 Prices `invalid_asin: …`, 19 Sales' skipped "UNKNOW") and the by-design `skip_*` reasons
-  (22, 24), 14's `incomplete: …`, 20 / 21's `skipped: finances_patch_pending`.
+  (22, 24), 14's `incomplete: …`. (20 / 21's `skipped: finances_patch_pending` is history since 2026-11-20.)
 - **Retry (Fees):** an ASIN whose estimate failed with "internal service failure", another 5xx, throttling or a timeout is
   asked again once, after the whole step and a 20 s backoff, before it counts (`counts.retried`, `counts.recovered`).
 - **No estimates row (2026-11-09):** every component that writes `asin_estimates` counts `rowCount`, never calls — an
@@ -3599,8 +3712,8 @@ In rough priority order:
 3. **FBA inbound shipment reconciliation** — every shipped unit linked to a
    specific PO (or to a removal order, which traces back to a PO). Depends
    on PO module.
-4. **Actuals data audit + Finances API integration** — see Section 13. The
-   single largest data integrity issue in the system.
+4. ~~**Actuals data audit + Finances API integration**~~ — built 2026-11-20
+   (the Finances API patch; §11 "Finances (components 19–21)", §13).
 5. **Aura COGS + MIN price automation** — depends on PO module (§11 "Aura cost
    sync" + "Aura repricer")
 6. **Auth + cloud deploy** — currently local-only
@@ -3623,57 +3736,40 @@ These are tracked here so we don't lose them. Each represents a column or
 metric that exists in the UI but doesn't pull the right data today. To be
 addressed in dedicated audit sessions.
 
-### Critical: Actual P&L is broken
+### Actuals (closed 2026-11-20): what still differs from SellerBoard, and why
 
-Per side-by-side comparison with SellerBoard for ASIN B07P7Y5J8H over the
-same period:
+The Finances API patch replaced the Actual P&L path (§1 "Actuals", §11
+"Finances (components 19–21)"). The old 90× understatement was the client's
+estimated-fee math applied to actual revenue, not double counting
+(`docs/finances-probe-2026-11-18.md` part A). The accepted differences from
+SB, each with its reason (`docs/claude_finances-acceptance-2026-11-20.md`):
 
-| Metric | SellerBoard | AsinFlow |
-|---|---|---|
-| Sales | $777.05 | $777.05 |
-| Refunds | 8 | 0 |
-| Refund $ | -$121.98 | not captured |
-| Net profit | $77.62 | $0.86 |
-| Margin | 9.99% | 0.1% |
-| ROI | 26.95% | 0.3% |
-
-AsinFlow's Actual profit is roughly 90× lower than SellerBoard's — costs are
-being substantially overstated somewhere in the calculation. The gap is not
-"close to right with some missing data." The numbers are wrong by orders of
-magnitude.
-
-Specific known gaps:
-
-- **Refunds** — not ingested from SP-API. Always shows 0 in the table, but
-  refund effects may be leaking into the cost side of the calculation in an
-  unexpected way that warrants diagnosis.
-- **Amazon fees (FBA, referral, other)** — `actual_fba_fees`,
-  `actual_referral_fees`, `actual_other_fees` columns in `sales_daily` are
-  populated by the fee engine, not by Amazon's Finances API. The values are
-  unverified.
-- **Inbound shipping** — currently estimated, not actual.
-- **Unit count drift** — minor (1–2 unit) discrepancies in some rows.
-- **Cost double-counting** — suspected based on the magnitude of the
-  understatement. Worth specific investigation: are fees being subtracted
-  from both revenue AND from a derived field? Are COGS being applied per
-  unit but multiplied by total units somewhere downstream?
-
-Required work: full audit of every Actuals field's data path. Trace from
-SP-API source → DB write → DB read → table render. Wire Finances API for
-fee data. Wire refund ingestion. Verify Actual Avg. Sale Price calculation.
-Reconcile against SellerBoard for at least 5–10 representative ASINs across
-different volume bands. Plan a dedicated session with diagnosis before
-patching.
-
-Until this lands: AsinFlow's Actual profit / margin / ROI are NOT
-authoritative. Use SellerBoard for real P&L decisions.
+- **COGS / Prep split with the Settings prep.** AF shows COGS and Prep as two
+  lines and prices Prep from Settings (Home POs $0); SB's single "Cost of
+  goods sold" carries the per-PO prep that was uploaded to it. Profit, Margin
+  and ROI differ by that amount (August 2026: SB's prep inside COGS 1,115.50
+  vs AF's Settings prep).
+- **Removal / disposal fees on the posting day** (SB dates them by the
+  removal order; Maria 2026-11-20: Amazon's posting day stays).
+- **Storage not amortized.** AF books Amazon's monthly storage row on the day
+  it posts (and the per-ASIN split from that month's storage fee report on
+  the same day); SB can spread it over the month's days (a setting Maria has
+  turned off). On an ASIN whose range holds the posting day the whole month
+  shows (B0756KB8N1 Oct 19 – Nov 17: −23.30 vs SB's amortized −10.33).
+- **Pending orders with nothing from Amazon yet** are fee-estimated from the
+  same ASIN's last posted fee; SB's guess runs higher. Gone once settled.
+- **ASIN-level Estimated payout is cash only**; SB's product page adds
+  Lost/damaged (fixture 2: 1,457.89 vs 1,546.47).
+- **The refund count can differ by one** (a two-item refund counted twice);
+  the money matches.
 
 ### Inventory adjustment data not synced
 
-SP-API Inventory Adjustments report, Removal Order Details report, and
-Returns Report are not yet ingested. Once synced, they feed the inventory
-movement journal (see Section 15). Until then, lost/damaged/returned units
-do not flow into AsinFlow's inventory state.
+The Removal Order Detail and Customer Returns reports are ingested since
+2026-11-20 (`fba_removals`, `fba_customer_returns`; §11 "Finances") for the
+P&L lines; the Inventory Adjustments report is not. None of them feeds an
+inventory movement journal yet (Section 15), so lost / damaged / returned
+units still do not flow into AsinFlow's inventory state.
 
 ### Other gaps
 
@@ -8708,7 +8804,11 @@ than inferred.
 — no context coupling) but keeps its own state and **never reads or
 mutates the global date range** other pages share. Switching to the
 Repricer tab and picking a range must not change what the ASINs page's
-Actuals show. This is why §23 stays out of the shared date-picker route
+Actuals show. Since the Finances API patch (2026-11-20) the Repricer's
+Actual columns read the same Finances facts as the ASINs table for the
+page's own effective range (`listAsinsHandler` takes the resolved range as
+the Actuals range), so they are real numbers, not $0.
+This is why §23 stays out of the shared date-picker route
 list (§8).
 
 **Data-coverage guard (decision: CLAMP, 2026-09-16).** `sales_daily`
@@ -10072,12 +10172,15 @@ hover, "missing $38.42 · can't sell $19.98") and **Lost / damaged by us**
 "$20.82 · 3 ASIN units" (a link; the kind is named, Maria 2026-11-15 —
 the mockup's "units" was changed to match), each a dim "$0.00" with no
 link and no small text when the range has nothing), **SALES** (Sales 28 px →
-Orders / Units · Refunds as a dim "—" with the "after the Finances API
-patch" tooltip), **PROFIT** (the label row carries "after the Finances API
-patch" on the right → Gross profit as a dim 28 px "—" → Net profit · Est.
-payout dim; the rows stay visible, Maria 2026-11-04 — the Finances patch
-replaces the dashes and drops the note). Sub-metric labels 12 px muted,
-values 16 px / 600. No "More" link. Components:
+Orders / ASIN units · Refunds "33 · $962.50"), **PROFIT** (Net profit 28 px →
+Gross profit · Est. payout · Margin · ROI; a **More** link in the label row
+opens the breakdown panel for the tile's range — Finances API patch
+2026-11-20, mockup `docs/mockups/finances-breakdown-2026-11-19.html`, its
+stylesheet verbatim in `client/src/components/finances-breakdown.css`; the
+"after the Finances API patch" placeholders and note are gone). Sub-metric
+labels 12 px muted, values 16 px / 600. A profit cell is a dim "—" only
+while `finances_daily` has nothing for the range (before
+`backfill:finances`). Components:
 `client/src/components/metric-tiles.tsx` (cards), `metric-grid.tsx` (the
 pure cell / coverage formatting it renders with).
 
@@ -10101,24 +10204,27 @@ only supplies numbers.
 | Supplier write-offs | **Claims commit 9 (patch §3.14, 2026-11-15).** Σ written off on CLOSED supplier claims — **Write off** (the whole $ owed) or **Write off remainder** (owed − the refunds applied) — one expression, `CLAIM_REMAINING_SQL` over `WRITTEN_OFF_CLAIM_COND` (`status = 'closed' AND write_off_reason IS NOT NULL`), dated by the write-off's **Eastern day** (`closed_at`, `WRITTEN_OFF_ON_SQL`). "· N claims"; the hover is the split by kind (`byKind`, largest first). A **reopened** claim leaves (status open). **Never in Spend** (the money was spent either way). **Clickable** → `/claims?bucket=closed&written_off_from=…&written_off_to=…` (Claims › Closed, only the claims written off inside the range; the list and the tab counts filter on `written_off_on`, "Written off … to … · clear"). The 143 sheet-era write-offs (migration 101, dated by the PO's last edit) were **re-dated to their PO's order date** on production 2026-11-15 (`npm run claims:redate-writeoffs -- --prod --live`, `closed_at` = noon Eastern on the order date, `found_at` = the date, one History row per claim; `docs/claims-writeoffs-redate-2026-11-15.csv`), so none of them reads in a current tile |
 | Lost / damaged by us | Σ over ASIN rows of the row's Lost/damaged by us **ASIN units** (`po_asin_expected.lost_damaged_us_asin`) × its `cost_per_unit` (a components-only row: Individual units × its per-Individual cost), on POs **ordered** in the range — AF does not record when a unit was lost, so the PO's order date is the date. "· N ASIN units" (the quantity-names rule); the hover says on how many POs. **Never in Spend.** **Clickable** → `/purchase-orders?lost=1&closed=all&from=…&to=…` (the POs with a row carrying lost / damaged units, `LOST_DAMAGED_PO_SQL`, a "Lost / damaged units · clear" chip on the list) |
 
-**SALES** (`sales_daily` + `sales_orders`, by the Pacific `sale_date`):
+**SALES** and **PROFIT** (Finances API patch, 2026-11-20): `readBreakdown`
+over `finances_daily` for the column's Pacific range (§11 "Finances"):
 
-| Row | Definition | Status |
-|---|---|---|
-| Sales | Σ `revenue` | real |
-| Orders / Units | `COUNT(DISTINCT amazon_order_id)` from `sales_orders` / Σ `units_sold` | real (C2); Orders shows "— / units · orders after the re-backfill" until `sales_orders` has rows |
-| Refunds | Σ `refund_amount` (units in small text) | **placeholder** — Finances API patch |
+| Row | Definition |
+|---|---|
+| Sales | product principal net of promotion by the order's Pacific purchase day; pending orders included, cancelled and S01- orders excluded; tax, shipping, shipping discount and shipping chargeback out (they net to zero) |
+| Orders / ASIN units | distinct order ids / Σ units ordered (or shipped when more) |
+| Refunds | the refund count by posted day · the refunded amount |
+| Net profit | = Gross profit (indirect expenses $0) |
+| Gross profit | Sales + Refund cost + Amazon fees + Cost of goods (COGS, Prep, Disposal of sellable products, Lost/damaged by Amazon) |
+| Est. payout | Sales + Refund cost without Value of returned items + Amazon fees (cash only) |
+| Margin / ROI | Net profit ÷ Sales / Net profit ÷ \|Cost of goods\| |
 
-**PROFIT** — SellerBoard's definitions, so the numbers will compare with SB:
-
-| Row | SB definition | Status |
-|---|---|---|
-| Gross profit | Sales − refunds − Amazon fees (referral, FBA, other) − promo / other Amazon charges | placeholder |
-| Net profit | Gross profit − COGS (actual COGS + prep for the units sold) − indirect expenses | placeholder |
-| Est. payout | Sales − refunds − Amazon fees (what Amazon pays out, before COGS) | placeholder |
-
-Placeholder = "—" with the tooltip "after the Finances API patch"
-(`pending: true`, `value: null` in the API).
+Before `npm run backfill:finances` has covered a column, Sales / Orders /
+Units fall back to `sales_daily` / `sales_orders` and the profit cells are a
+dim "—" (`pending: true`, `value: null`). The **More** link opens
+`GET /api/finances/breakdown` for the column: every line of the model in
+SB's names, order and groups (Refund cost, Amazon fees, Cost of goods
+collapse and expand); a $0.00 line is not listed inside a group; a fee line
+with an estimated part says "includes $X estimated for N pending units" on
+hover only.
 
 **Coverage guard** (the §23 rule): a Sales cell whose column starts before
 the earliest `sale_date` shows its value with "data from <date>"; the
@@ -10181,7 +10287,7 @@ it — one basis everywhere; the Finances patch inherits it.
 
 | Item | Fills it |
 |---|---|
-| Refunds (Sales), Gross profit, Net profit, Est. payout | the Finances API patch (listTransactions): writes `sales_daily.refund_amount` / `units_refunded` / the fee columns; the grid only reads them |
+| Refunds (Sales), Gross profit, Net profit, Est. payout | built 2026-11-20 (the Finances API patch, §11 "Finances"): `finances_daily` through `readBreakdown`; on production the numbers appear once `npm run backfill:finances -- --prod` has run after the deploy |
 | Due refunds from supplier emails | `docs/claude_spec-patch-po-cancellations-from-email.md` (writes `po_line_refunds` due rows, §22) |
 | Line resolutions (missing / damaged / wrong from the supplier, refund / replacement / write-off) | built: §22 "Supplier defects" (migration 094); the cancellations patch reuses it |
 | Pack sizes on the 2024–2025 rows ("n rows missing pack size") | Maria's `docs/pack-size-gaps-*.csv` work |
