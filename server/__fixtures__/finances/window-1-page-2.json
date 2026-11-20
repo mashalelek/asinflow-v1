@@ -1,0 +1,258 @@
+{
+ "payload": {
+  "transactions": [
+   {
+    "transactionType": "ServiceFee",
+    "transactionId": "7Xoc7XjteMjPdq5jZ8w7PgyZSdEyBXiLg0HVxczQFwI",
+    "transactionStatus": "RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "AZhYvgfmYZ_50FlB8UgbdPR1jerKw6Bytf3-Qi3jZeg"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27233227451"
+     },
+     {
+      "relatedIdentifierName": "ORDER_ID",
+      "relatedIdentifierValue": "FBA19K9HJ64S"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": -12.54,
+     "currencyCode": "USD"
+    },
+    "description": "FBAPostInboundTransportation",
+    "postedDate": "2026-07-29T20:41:52Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [
+     {
+      "description": "FBA Amazon-Partnered Carrier Shipment Fee",
+      "totalAmount": {
+       "currencyAmount": -12.54,
+       "currencyCode": "USD"
+      },
+      "relatedIdentifiers": [],
+      "breakdowns": [
+       {
+        "breakdownType": "FBAFees",
+        "breakdownAmount": {
+         "currencyAmount": -12.54,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "InboundTransportationFee",
+          "breakdownAmount": {
+           "currencyAmount": -12.54,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "FBAInboundTransportationFee",
+            "breakdownAmount": {
+             "currencyAmount": -12.54,
+             "currencyCode": "USD"
+            },
+            "breakdowns": [
+             {
+              "breakdownType": "Base",
+              "breakdownAmount": {
+               "currencyAmount": -12.54,
+               "currencyCode": "USD"
+              }
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       }
+      ],
+      "contexts": [
+       {
+        "asin": null,
+        "quantityShipped": null,
+        "sku": null,
+        "fulfillmentNetwork": "",
+        "contextType": "ProductContext"
+       }
+      ]
+     }
+    ],
+    "breakdowns": [
+     {
+      "breakdownType": "Sales",
+      "breakdownAmount": {
+       "currencyAmount": 0,
+       "currencyCode": "USD"
+      },
+      "breakdowns": []
+     },
+     {
+      "breakdownType": "Expenses",
+      "breakdownAmount": {
+       "currencyAmount": -12.54,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "InboundTransportationFee",
+        "breakdownAmount": {
+         "currencyAmount": -12.54,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     }
+    ],
+    "contexts": null
+   },
+   {
+    "transactionType": "FBAInventoryReimbursement",
+    "transactionId": "gTUTp5ajK5N2ZxGjYaUYMK0QMQZPblNE_NTZMdODsr8",
+    "transactionStatus": "RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "_X3DXaRDn5zhauP8awzJQnt6XW8oDFLLiWTGe50C1CE"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27252202371"
+     },
+     {
+      "relatedIdentifierName": "ORDER_ID",
+      "relatedIdentifierValue": "114-1926619-2154665"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": 38.46,
+     "currencyCode": "USD"
+    },
+    "description": "REVERSAL_REIMBURSEMENT",
+    "postedDate": "2026-08-03T22:11:41Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [
+     {
+      "description": "Fujifilm Instax Mini Instant Film BLACK FRAME 3-PACK BUNDLE SET , Film Black Frame ( 10 x 3 ) for Mini 90 8 70 7s 50s 25 300 Camera SP-1 Printer",
+      "totalAmount": {
+       "currencyAmount": 38.46,
+       "currencyCode": "USD"
+      },
+      "relatedIdentifiers": null,
+      "breakdowns": [
+       {
+        "breakdownType": "FBAInventoryReimbursement",
+        "breakdownAmount": {
+         "currencyAmount": 38.46,
+         "currencyCode": "USD"
+        },
+        "breakdowns": []
+       }
+      ],
+      "contexts": [
+       {
+        "asin": "B01MQ0IP8F",
+        "quantityShipped": 1,
+        "sku": "K8-RJI7-S2AI",
+        "fulfillmentNetwork": null,
+        "contextType": "ProductContext"
+       }
+      ]
+     }
+    ],
+    "breakdowns": [
+     {
+      "breakdownType": "Sales",
+      "breakdownAmount": {
+       "currencyAmount": 38.46,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "FBAInventoryReimbursement",
+        "breakdownAmount": {
+         "currencyAmount": 38.46,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     },
+     {
+      "breakdownType": "Expenses",
+      "breakdownAmount": {
+       "currencyAmount": 0,
+       "currencyCode": "USD"
+      },
+      "breakdowns": []
+     }
+    ],
+    "contexts": null
+   },
+   {
+    "transactionType": "Transfer",
+    "transactionId": "iuDWESF2umljf73aFy7lpKu0yhh7v-mVDP9FARb-vwA",
+    "transactionStatus": "RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "_X3DXaRDn5zhauP8awzJQnt6XW8oDFLLiWTGe50C1CE"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27252202371"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": 727.98,
+     "currencyCode": "USD"
+    },
+    "description": "Disbursement",
+    "postedDate": "2026-08-02T14:48:36Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [],
+    "breakdowns": [
+     {
+      "breakdownType": "Sales",
+      "breakdownAmount": {
+       "currencyAmount": 727.98,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "FundTransfer",
+        "breakdownAmount": {
+         "currencyAmount": 727.98,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     },
+     {
+      "breakdownType": "Expenses",
+      "breakdownAmount": {
+       "currencyAmount": 0,
+       "currencyCode": "USD"
+      },
+      "breakdowns": []
+     }
+    ],
+    "contexts": null
+   }
+  ]
+ }
+}

@@ -65,6 +65,9 @@ const OPERATION_TABLE: { key: string; test: RegExp; spec: BucketSpec }[] = [
   { key: "fbaInbound.getShipments", test: /^\/fba\/inbound\/v0\/shipments$/, spec: { rate: 2, burst: 30 } },
   { key: "fbaInbound.getShipmentItemsById", test: /^\/fba\/inbound\/v0\/shipments\/[^/]+\/items$/, spec: { rate: 2, burst: 30 } },
   { key: "fbaInbound.getShipmentItems", test: /^\/fba\/inbound\/v0\/shipmentItems$/, spec: { rate: 2, burst: 30 } },
+  // Finances (Finances API patch, 2026-11-20): both versions answer x-amzn-RateLimit-Limit 0.5 (probe 2026-11-18); only v2024-06-19 is called.
+  { key: "finances.transactions", test: /^\/finances\/2024-06-19\/transactions$/, spec: { rate: 0.5, burst: 10 } },
+  { key: "finances.financialEvents", test: /^\/finances\/v0\/financialEvents$/, spec: { rate: 0.5, burst: 30 } },
   // Reports 2021-06-30
   { key: "reports.getDocument", test: /^\/reports\/2021-06-30\/documents\/[^/]+$/, spec: { rate: 0.0167, burst: 15 } },
   { key: "reports.getReport", test: /^\/reports\/2021-06-30\/reports\/[^/]+$/, spec: { rate: 2, burst: 15 } },

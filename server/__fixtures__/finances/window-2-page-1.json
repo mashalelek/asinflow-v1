@@ -1,0 +1,918 @@
+{
+ "payload": {
+  "transactions": [
+   {
+    "transactionType": "Shipment",
+    "transactionId": "g5_sFeN_OIkOyha2SICwZH2rFIROnqnlFgX8Mql4kkE",
+    "transactionStatus": "RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "l1H5MZYSGW1wUq-OOzt1ile_lyXJZM9pXAKnCgGvftw"
+     },
+     {
+      "relatedIdentifierName": "SHIPMENT_ID",
+      "relatedIdentifierValue": "490397203170301"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27332843791"
+     },
+     {
+      "relatedIdentifierName": "ORDER_ID",
+      "relatedIdentifierValue": "113-2046126-7989841"
+     },
+     {
+      "relatedIdentifierName": "DEFERRED_TRANSACTION_ID",
+      "relatedIdentifierValue": "M-SKJhuzVkKNt0UMhnnYppjglVO84ge2BDrk6kQ5hqo"
+     },
+     {
+      "relatedIdentifierName": "OBFUSCATED_SHIPMENT_ID",
+      "relatedIdentifierValue": "N7hkQTPxy"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": 25.28,
+     "currencyCode": "USD"
+    },
+    "description": "Order Payment",
+    "postedDate": "2026-08-11T23:29:08Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [
+     {
+      "description": "Amino Genesis Cocoon Total Body moisturizing Lotion - 8 fl oz",
+      "totalAmount": {
+       "currencyAmount": 25.28,
+       "currencyCode": "USD"
+      },
+      "relatedIdentifiers": [
+       {
+        "itemRelatedIdentifierName": "ORDER_ADJUSTMENT_ITEM_ID",
+        "itemRelatedIdentifierValue": "166072043758761"
+       }
+      ],
+      "breakdowns": [
+       {
+        "breakdownType": "ProductCharges",
+        "breakdownAmount": {
+         "currencyAmount": 34.86,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "OurPricePrincipal",
+          "breakdownAmount": {
+           "currencyAmount": 34.86,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "Tax",
+        "breakdownAmount": {
+         "currencyAmount": 0,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "OurPriceTax",
+          "breakdownAmount": {
+           "currencyAmount": 2.88,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         },
+         {
+          "breakdownType": "MarketplaceFacilitatorTax-Principal",
+          "breakdownAmount": {
+           "currencyAmount": -2.88,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "AmazonFees",
+        "breakdownAmount": {
+         "currencyAmount": -9.58,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "FBAPerUnitFulfillmentFee",
+          "breakdownAmount": {
+           "currencyAmount": -4.35,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -4.35,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         },
+         {
+          "breakdownType": "Commission",
+          "breakdownAmount": {
+           "currencyAmount": -5.23,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -5.23,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         }
+        ]
+       }
+      ],
+      "contexts": [
+       {
+        "asin": "B0001EKWNK",
+        "quantityShipped": 1,
+        "sku": "AMG-BP-LOT-COC-003",
+        "fulfillmentNetwork": "AFN",
+        "contextType": "ProductContext"
+       }
+      ]
+     }
+    ],
+    "breakdowns": [
+     {
+      "breakdownType": "Sales",
+      "breakdownAmount": {
+       "currencyAmount": 34.86,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "ProductCharges",
+        "breakdownAmount": {
+         "currencyAmount": 34.86,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     },
+     {
+      "breakdownType": "Expenses",
+      "breakdownAmount": {
+       "currencyAmount": -9.58,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "AmazonFees",
+        "breakdownAmount": {
+         "currencyAmount": -9.58,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "FBAPerUnitFulfillmentFee",
+          "breakdownAmount": {
+           "currencyAmount": -4.35,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -4.35,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         },
+         {
+          "breakdownType": "Commission",
+          "breakdownAmount": {
+           "currencyAmount": -5.23,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -5.23,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "contexts": [
+     {
+      "contextType": "AddressContext"
+     }
+    ]
+   },
+   {
+    "transactionType": "Shipment",
+    "transactionId": "M-SKJhuzVkKNt0UMhnnYppjglVO84ge2BDrk6kQ5hqo",
+    "transactionStatus": "DEFERRED_RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "_X3DXaRDn5zhauP8awzJQnt6XW8oDFLLiWTGe50C1CE"
+     },
+     {
+      "relatedIdentifierName": "SHIPMENT_ID",
+      "relatedIdentifierValue": "490397203170301"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27252202371"
+     },
+     {
+      "relatedIdentifierName": "ORDER_ID",
+      "relatedIdentifierValue": "113-2046126-7989841"
+     },
+     {
+      "relatedIdentifierName": "RELEASE_TRANSACTION_ID",
+      "relatedIdentifierValue": "g5_sFeN_OIkOyha2SICwZH2rFIROnqnlFgX8Mql4kkE"
+     },
+     {
+      "relatedIdentifierName": "OBFUSCATED_SHIPMENT_ID",
+      "relatedIdentifierValue": "N7hkQTPxy"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": 25.28,
+     "currencyCode": "USD"
+    },
+    "description": "Order Payment",
+    "postedDate": "2026-08-02T03:42:14Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [
+     {
+      "description": "Amino Genesis Cocoon Total Body moisturizing Lotion - 8 fl oz",
+      "totalAmount": {
+       "currencyAmount": 25.28,
+       "currencyCode": "USD"
+      },
+      "relatedIdentifiers": [
+       {
+        "itemRelatedIdentifierName": "ORDER_ADJUSTMENT_ITEM_ID",
+        "itemRelatedIdentifierValue": "166072043758761"
+       }
+      ],
+      "breakdowns": [
+       {
+        "breakdownType": "ProductCharges",
+        "breakdownAmount": {
+         "currencyAmount": 34.86,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "OurPricePrincipal",
+          "breakdownAmount": {
+           "currencyAmount": 34.86,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "Tax",
+        "breakdownAmount": {
+         "currencyAmount": 0,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "OurPriceTax",
+          "breakdownAmount": {
+           "currencyAmount": 2.88,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         },
+         {
+          "breakdownType": "MarketplaceFacilitatorTax-Principal",
+          "breakdownAmount": {
+           "currencyAmount": -2.88,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "AmazonFees",
+        "breakdownAmount": {
+         "currencyAmount": -9.58,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "FBAPerUnitFulfillmentFee",
+          "breakdownAmount": {
+           "currencyAmount": -4.35,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -4.35,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         },
+         {
+          "breakdownType": "Commission",
+          "breakdownAmount": {
+           "currencyAmount": -5.23,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -5.23,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         }
+        ]
+       }
+      ],
+      "contexts": [
+       {
+        "asin": "B0001EKWNK",
+        "quantityShipped": 1,
+        "sku": "AMG-BP-LOT-COC-003",
+        "fulfillmentNetwork": "AFN",
+        "contextType": "ProductContext"
+       }
+      ]
+     }
+    ],
+    "breakdowns": [
+     {
+      "breakdownType": "Sales",
+      "breakdownAmount": {
+       "currencyAmount": 34.86,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "ProductCharges",
+        "breakdownAmount": {
+         "currencyAmount": 34.86,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     },
+     {
+      "breakdownType": "Expenses",
+      "breakdownAmount": {
+       "currencyAmount": -9.58,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "AmazonFees",
+        "breakdownAmount": {
+         "currencyAmount": -9.58,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "FBAPerUnitFulfillmentFee",
+          "breakdownAmount": {
+           "currencyAmount": -4.35,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -4.35,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         },
+         {
+          "breakdownType": "Commission",
+          "breakdownAmount": {
+           "currencyAmount": -5.23,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -5.23,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "contexts": [
+     {
+      "deferralReason": "DD7",
+      "maturityDate": "2026-08-10T23:53:00Z",
+      "contextType": "DeferredContext"
+     },
+     {
+      "contextType": "AddressContext"
+     }
+    ]
+   },
+   {
+    "transactionType": "Refund",
+    "transactionId": "LQVxUX-Iv4myQgFQc0B-wlD-g3Pm5ylh08iMMiACP94",
+    "transactionStatus": "RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "_X3DXaRDn5zhauP8awzJQnt6XW8oDFLLiWTGe50C1CE"
+     },
+     {
+      "relatedIdentifierName": "REFUND_ID",
+      "relatedIdentifierValue": "amzn1:crow:eF6FnQdyT1urCoyzZIHvZg"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27252202371"
+     },
+     {
+      "relatedIdentifierName": "ORDER_ID",
+      "relatedIdentifierValue": "114-0677963-8857869"
+     },
+     {
+      "relatedIdentifierName": "DEFERRED_TRANSACTION_ID",
+      "relatedIdentifierValue": "GQaH-OAxg-PBZ2TWSmAILYIgtLjKBWbGxiYzyZ-tln8"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": -33.53,
+     "currencyCode": "USD"
+    },
+    "description": "Refund",
+    "postedDate": "2026-08-03T14:30:22Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [
+     {
+      "description": "ASO Ankle Stabilizing Orthosis w/inserts (Small - Black)",
+      "totalAmount": {
+       "currencyAmount": -33.53,
+       "currencyCode": "USD"
+      },
+      "relatedIdentifiers": [
+       {
+        "itemRelatedIdentifierName": "ORDER_ADJUSTMENT_ITEM_ID",
+        "itemRelatedIdentifierValue": "165167453565921"
+       }
+      ],
+      "breakdowns": [
+       {
+        "breakdownType": "PromoRebates",
+        "breakdownAmount": {
+         "currencyAmount": 3.34,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "ShippingDiscount",
+          "breakdownAmount": {
+           "currencyAmount": 3.34,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "Tax",
+        "breakdownAmount": {
+         "currencyAmount": 0,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "OurPriceTax",
+          "breakdownAmount": {
+           "currencyAmount": -2.38,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         },
+         {
+          "breakdownType": "MarketplaceFacilitatorTax-Principal",
+          "breakdownAmount": {
+           "currencyAmount": 2.38,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "ProductCharges",
+        "breakdownAmount": {
+         "currencyAmount": -38.11,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "OurPricePrincipal",
+          "breakdownAmount": {
+           "currencyAmount": -38.11,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "Shipping",
+        "breakdownAmount": {
+         "currencyAmount": -3.34,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "ShippingPrincipal",
+          "breakdownAmount": {
+           "currencyAmount": -3.34,
+           "currencyCode": "USD"
+          },
+          "breakdowns": []
+         }
+        ]
+       },
+       {
+        "breakdownType": "AmazonFees",
+        "breakdownAmount": {
+         "currencyAmount": 4.58,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "Commission",
+          "breakdownAmount": {
+           "currencyAmount": 5.72,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": 5.72,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         },
+         {
+          "breakdownType": "RefundCommission",
+          "breakdownAmount": {
+           "currencyAmount": -1.14,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -1.14,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         }
+        ]
+       }
+      ],
+      "contexts": [
+       {
+        "asin": "B005VEEGUU",
+        "quantityShipped": 1,
+        "sku": "LO-GPID-PI07",
+        "fulfillmentNetwork": "AFN",
+        "contextType": "ProductContext"
+       }
+      ]
+     }
+    ],
+    "breakdowns": [
+     {
+      "breakdownType": "Refunded Expenses",
+      "breakdownAmount": {
+       "currencyAmount": 7.92,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "PromoRebates",
+        "breakdownAmount": {
+         "currencyAmount": 3.34,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       },
+       {
+        "breakdownType": "AmazonFees",
+        "breakdownAmount": {
+         "currencyAmount": 4.58,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     },
+     {
+      "breakdownType": "Refunded Sales",
+      "breakdownAmount": {
+       "currencyAmount": -41.45,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "ProductCharges",
+        "breakdownAmount": {
+         "currencyAmount": -38.11,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       },
+       {
+        "breakdownType": "Shipping",
+        "breakdownAmount": {
+         "currencyAmount": -3.34,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     }
+    ],
+    "contexts": null
+   },
+   {
+    "transactionType": "ServiceFee",
+    "transactionId": "kqZWLbegg314du3hTJmh9_k2k2CKJtqUJzGHJA0M6uc",
+    "transactionStatus": "RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "_X3DXaRDn5zhauP8awzJQnt6XW8oDFLLiWTGe50C1CE"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27252202371"
+     },
+     {
+      "relatedIdentifierName": "ORDER_ID",
+      "relatedIdentifierValue": "H0/r6XLI7Y"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": -2.27,
+     "currencyCode": "USD"
+    },
+    "description": "FBARemoval",
+    "postedDate": "2026-08-04T03:48:00Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [
+     {
+      "description": "FBA Removal Order: Return Fee",
+      "totalAmount": {
+       "currencyAmount": -2.27,
+       "currencyCode": "USD"
+      },
+      "relatedIdentifiers": [],
+      "breakdowns": [
+       {
+        "breakdownType": "FBAFees",
+        "breakdownAmount": {
+         "currencyAmount": -2.27,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "FBARemovalFee",
+          "breakdownAmount": {
+           "currencyAmount": -2.27,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "Base",
+            "breakdownAmount": {
+             "currencyAmount": -2.27,
+             "currencyCode": "USD"
+            },
+            "breakdowns": []
+           }
+          ]
+         }
+        ]
+       }
+      ],
+      "contexts": [
+       {
+        "asin": null,
+        "quantityShipped": null,
+        "sku": null,
+        "fulfillmentNetwork": "",
+        "contextType": "ProductContext"
+       }
+      ]
+     }
+    ],
+    "breakdowns": [
+     {
+      "breakdownType": "Sales",
+      "breakdownAmount": {
+       "currencyAmount": 0,
+       "currencyCode": "USD"
+      },
+      "breakdowns": []
+     },
+     {
+      "breakdownType": "Expenses",
+      "breakdownAmount": {
+       "currencyAmount": -2.27,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "FBAFees",
+        "breakdownAmount": {
+         "currencyAmount": -2.27,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     }
+    ],
+    "contexts": null
+   },
+   {
+    "transactionType": "ServiceFee",
+    "transactionId": "4FT5p7kAsVqiuxq-G2e8Lnn6mSkigkUexz_hvxU9JwM",
+    "transactionStatus": "RELEASED",
+    "relatedIdentifiers": [
+     {
+      "relatedIdentifierName": "FINANCIAL_EVENT_GROUP_ID",
+      "relatedIdentifierValue": "_X3DXaRDn5zhauP8awzJQnt6XW8oDFLLiWTGe50C1CE"
+     },
+     {
+      "relatedIdentifierName": "SETTLEMENT_ID",
+      "relatedIdentifierValue": "27252202371"
+     },
+     {
+      "relatedIdentifierName": "ORDER_ID",
+      "relatedIdentifierValue": "FBA19G364JLZ"
+     }
+    ],
+    "totalAmount": {
+     "currencyAmount": -3.54,
+     "currencyCode": "USD"
+    },
+    "description": "FBAInboundConvenience",
+    "postedDate": "2026-08-03T08:16:33Z",
+    "marketplaceDetails": {
+     "marketplaceId": "ATVPDKIKX0DER",
+     "marketplaceName": "Amazon.com"
+    },
+    "items": [
+     {
+      "description": "FBA Inbound Placement Service Fee",
+      "totalAmount": {
+       "currencyAmount": -3.54,
+       "currencyCode": "USD"
+      },
+      "relatedIdentifiers": [],
+      "breakdowns": [
+       {
+        "breakdownType": "FBAFees",
+        "breakdownAmount": {
+         "currencyAmount": -3.54,
+         "currencyCode": "USD"
+        },
+        "breakdowns": [
+         {
+          "breakdownType": "InboundConvenienceCharge",
+          "breakdownAmount": {
+           "currencyAmount": -3.54,
+           "currencyCode": "USD"
+          },
+          "breakdowns": [
+           {
+            "breakdownType": "FBAInboundConvenienceFee",
+            "breakdownAmount": {
+             "currencyAmount": -3.54,
+             "currencyCode": "USD"
+            },
+            "breakdowns": [
+             {
+              "breakdownType": "Base",
+              "breakdownAmount": {
+               "currencyAmount": -3.54,
+               "currencyCode": "USD"
+              }
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       }
+      ],
+      "contexts": [
+       {
+        "asin": null,
+        "quantityShipped": null,
+        "sku": null,
+        "fulfillmentNetwork": "",
+        "contextType": "ProductContext"
+       }
+      ]
+     }
+    ],
+    "breakdowns": [
+     {
+      "breakdownType": "Sales",
+      "breakdownAmount": {
+       "currencyAmount": 0,
+       "currencyCode": "USD"
+      },
+      "breakdowns": []
+     },
+     {
+      "breakdownType": "Expenses",
+      "breakdownAmount": {
+       "currencyAmount": -3.54,
+       "currencyCode": "USD"
+      },
+      "breakdowns": [
+       {
+        "breakdownType": "InboundConvenienceCharge",
+        "breakdownAmount": {
+         "currencyAmount": -3.54,
+         "currencyCode": "USD"
+        },
+        "breakdowns": null
+       }
+      ]
+     }
+    ],
+    "contexts": null
+   }
+  ]
+ }
+}
