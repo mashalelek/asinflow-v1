@@ -76,6 +76,28 @@ export function createJobsRouter(deps: { query?: QueryLike; nextPassAt?: () => P
     }
   });
 
+  // Finances backfill (Finances API patch commit 6, SPEC §7): admin-only. ONE
+  // manual job running 19 + 20 + 21 over the window (orders report, Finances
+  // transactions by week, the three reports, the finances_daily rebuild).
+  // `npm run backfill:finances` is the shell entry.
+  router.post("/api/jobs/backfill-finances", requireRole("admin"), async (req: Request, res: Response) => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const w = parseBackfillWindow({ from: req.body?.from ?? "2024-11-19", to: req.body?.to ?? today }, today);
+    if ("error" in w) { res.status(400).json({ error: "invalid_window", message: w.error }); return; }
+    try {
+      const job = await enqueueJob({
+        trigger: "manual", includeDaily: false, components: [19, 20, 21], scopeAsins: null,
+        params: { sales_window: { from: w.from, to: w.to }, finances_window: { from: w.from, to: w.to }, finances_reports: true },
+        requestedBy: req.session?.userId ?? null,
+      }, query);
+      const ahead = laneAhead(job, await listActive(query));
+      res.status(202).json({ job, ahead });
+    } catch (err: any) {
+      res.status(500).json({ error: "enqueue_failed", message: err?.message ?? String(err) });
+    }
+  });
+
   // Inventory Ledger backfill (listing hygiene, 2026-10-19): admin-only. ONE
   // manual job running component 23 alone over params.ledger_window — 92-day
   // chunks, spaced for the report quota, QuotaExceeded retried on the same

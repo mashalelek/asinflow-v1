@@ -18,6 +18,7 @@
     "migrate:status": "tsx script/migrate.ts --status",
     "backfill:line-action-items": "tsx script/backfill-line-action-items.ts",
     "backfill:sales": "tsx script/backfill-sales.ts",
+    "backfill:finances": "tsx script/backfill-finances.ts",
     "backfill:asin-pack": "tsx script/asin-pack-review.ts",
     "backfill:asin-estimates": "tsx script/backfill-asin-estimates.ts",
     "onboard:po-asins": "tsx script/onboard-po-asins.ts",
