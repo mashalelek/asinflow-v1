@@ -11,7 +11,7 @@ export type FinancesLine =
   | "fba_fee" | "referral_fee" | "vcf"
   | "cogs" | "prep" | "disposal_value" | "lost_damaged"
   | "shipping" | "tax"
-  | "returns_units" | "returns_sellable"
+  | "returns_units" | "returns_sellable" | "refund_units" | "cogs_missing"
   | `svc:${string}` | `reimb:${string}` | `fee:${string}` | `refund_fee:${string}` | `other:${string}`;
 
 export type FinancesGroup = "top" | "refund_cost" | "amazon_fees" | "cost_of_goods" | "hidden";
@@ -62,7 +62,7 @@ export function groupOf(line: string): FinancesGroup {
     case "refund_amount": case "refund_commission": case "refund_customer_return_fee": case "restocking": case "refund_vcf": case "refunded_referral": case "returned_value": return "refund_cost";
     case "fba_fee": case "referral_fee": case "vcf": return "amazon_fees";
     case "cogs": case "prep": case "disposal_value": case "lost_damaged": return "cost_of_goods";
-    case "shipping": case "tax": case "returns_units": case "returns_sellable": return "hidden";
+    case "shipping": case "tax": case "returns_units": case "returns_sellable": case "refund_units": case "cogs_missing": return "hidden";
   }
   if (line.startsWith("refund_fee:")) return "refund_cost";
   if (line === "svc:FBACustomerReturn") return "refund_cost";
