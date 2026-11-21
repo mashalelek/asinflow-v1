@@ -150,11 +150,89 @@ shipping surcharge (1.20 + 0 + 1.00); rows 11–12 unchanged.
 
 ## Production results
 
-Not run yet (2026-11-20 evening): production is on `1696c06` — the patch is
-not pushed, migrations 122–124 are not applied there and no Finances table
-exists, so `backfill:finances` cannot have run and no 00:00 pass has run
-components 19–21 for real. The section below is filled in once the deploy
-and the backfill are done.
+Deployed 2026-11-20 22:33 UTC (`730356e`, migrations 122–124 at boot); the
+history backfill `npm run backfill:finances -- --prod` ran as job #784
+(22:36 → 01:08 UTC): 19 — 25 orders-report chunks, 34,900 order lines,
+none failed; 20 — 105 weekly Finances windows, 77,148 transactions read,
+41,749 stored; 21 — customer returns 13 chunks / 1,173 rows, `finances_daily`
+161,524 rows. Two report steps did not finish in that job: the removal
+order report ended FATAL on its second chunk (Amazon refuses an overlapping
+request) and the storage fee report hit `createReport` QuotaExceeded when
+25 months were asked at once. Fixed and redeployed (`3fc717e` → `dd514fd`:
+a failed chunk is recorded and the rest still run; the storage report is
+asked two newest + three missing months per pass; `postedBefore` 5 min
+behind now — the first hourly pull after the deploy had answered 400 at
+now − 60 s). The reports rerun `npm run backfill:finances -- --prod --from
+2025-01-20 --reports-only` is job #790 (started 02:19 UTC): returns 12/12
+chunks done; removals move at that report type's own quota, about one
+chunk an hour — the storage months and the rebuild follow it. The two
+lines that depend on it are marked **pending** below and get filled in when
+it ends. Figures read from production with `readBreakdown` (read-only).
+
+### Row 2 and rows 4–7 — Aug 1 – 31, 2026, the account (production)
+
+| Line | SB | Production | Δ | Cause |
+|---|---:|---:|---:|---|
+| Sales | 33,775.91 | 33,775.91 | 0.00 | |
+| Units | 1,232 | 1,232 | 0 | |
+| Refunds | 33 | 32 | −1 | accepted: SB counts a two-item refund twice; the money matches |
+| Refunded amount | −962.50 | −962.50 | 0.00 | |
+| Refund commission | −27.21 | −27.21 | 0.00 | |
+| FBA customer return per unit fee | −9.28 | −9.28 | 0.00 | |
+| Refunded referral fee | +135.99 | +135.99 | 0.00 | |
+| Value of returned items | +260.63 | +265.31 | +4.68 | 22 sellable units × the Settings prep 1.20 where SB had the per-PO prep (accepted difference 1) |
+| FBA per unit fulfilment fee | −6,241.30 | −6,241.29 | +0.01 | the one still-pending unit estimated at −5.76 (SB −5.77) |
+| Referral fee | −4,886.96 | −4,886.99 | −0.03 | the same unit at −3.90 (SB −3.87) |
+| Inbound transportation | −1,275.27 | −1,275.27 | 0.00 | |
+| FBA inbound convenience fee | −70.80 | −70.80 | 0.00 | |
+| FBA storage fee | −51.42 | −51.47 | −0.05 | SB rounds the storage report; AF books the Finances row (accepted) |
+| Compensated clawback | −44.54 | −44.54 | 0.00 | |
+| FBA removal fee | −42.55 | −35.84 | +6.71 | posting day vs SB's removal-order day (accepted); with disposal below, together +2.76 |
+| Subscription | −39.99 | −39.99 | 0.00 | |
+| Missing from inbound clawback | −21.61 | −21.61 | 0.00 | |
+| FBA disposal fee | −0.84 | −4.79 | −3.95 | the 08-16 disposal of a returned unit, which SB lists under removal (accepted) |
+| Free replacement refund items | +15.74 | +15.74 | 0.00 | |
+| Warehouse lost | +18.09 | +18.09 | 0.00 | |
+| Missing from inbound | +53.01 | +53.01 | 0.00 | |
+| Creturn wrong item | +147.15 | +147.15 | 0.00 | |
+| Warehouse damage | +169.84 | +169.84 | 0.00 | |
+| Reversal reimbursement | +359.21 | +359.21 | 0.00 | |
+| **Amazon fees total** | **−11,912.24** | **−11,909.55** | **+2.69** | removal / disposal dating +2.76, storage rounding −0.05, the pending unit −0.02 — within row 4's $3 |
+| COGS | (in −17,319.08) | −16,210.44 | | row 6's −16,198.54 + 11.90 for the pending unit's COGS (its sale is counted); 1,231 of 1,232 units have a PO cost |
+| Prep | (in −17,319.08) | −1,376.00 | | the Settings rule (Velocity units × 1.20, hazmat × 2.20, Home × 0); SB's single line carries 1,115.50 of per-PO prep |
+| Disposal of sellable products | −10.66 | **pending** | | the removal order detail report for Aug 2026 is a later chunk of job #790; locally (same rule, same report) it was −10.66 |
+| Lost/damaged by Amazon | −189.18 | −195.03 | −5.85 | 29 lost − 11 found units at the Settings prep 1.20 instead of SB's per-PO prep (accepted difference 1; −189.53 with the PO prep in the probe) |
+| Gross profit = Net profit | 3,742.38 | 3,487.20 | −255.18 | = the Prep difference (−260.50) + the returned-items / lost-damaged prep effects (−1.17) + fees +2.69 + the pending unit's COGS −11.90; moves by +10.66 when the disposal line lands |
+| Estimated payout | 21,000.67 | 21,003.36 | +2.69 | the fee Δ; within row 2's $3 |
+| Refund rate / Sellable returns | 2.68 % / 68.75 % | 2.60 % / 68.75 % | | 32 vs 33 refunds; the returns report agrees with SB on sellable units |
+
+### Row 8 — B0756KB8N1, Oct 19 – Nov 17, 2026 (production)
+
+| Line | SB (fixture 2) | Production | Δ | Cause |
+|---|---:|---:|---:|---|
+| Sales | 2,330.82 | 2,330.82 | 0.00 | |
+| Units | 26 | 26 | 0 | |
+| Refunds | 1 | 1 | 0 | |
+| Refund cost | −79.19 | −79.19 | 0.00 | −89.99 / −2.70 / +13.50 |
+| Referral fee | −349.63 | −349.64 | −0.01 | within row 8's ±0.01 |
+| FBA per unit fulfilment fee | −293.02 | −293.02 | 0.00 | 3 units still on DEFERRED rows (hover: "includes $33.81 estimated for 3 pending units") |
+| Inbound transportation | −95.66 | −95.73 | −0.07 | the weight split over the shipments' contents (commit 0 (d)); within $5 |
+| Compensated clawback | −22.55 | −22.55 | 0.00 | |
+| Missing from inbound clawback | −22.55 | −22.55 | 0.00 | |
+| FBA storage fee | −10.33 | **pending** (will read −23.30) | | the storage fee report (October) is pulled by job #790 / the next nightly passes; by decision not amortized, the whole November 7 posting shows — SB's −10.33 is 13/31 of it (row 8's ±$1 cannot hold under that decision) |
+| COGS | (in −1,104.46) | −1,066.46 | | = the acceptance figure exactly (cost period: 40.65 → 45.43 on 11-01) |
+| Prep | | −31.20 | | 26 Velocity units × 1.20 |
+| Lost/damaged by Amazon | +88.58 | +88.48 | −0.10 | two found units at 40.65 + 1.20 and 45.43 + 1.20 (SB's per-PO prep 1.50 / 1.00) |
+| Estimated payout | 1,457.89 (cash) | 1,468.14 | +10.25 | reads 1,444.84 once the storage line lands (−23.30 vs SB's −10.33: −12.97 by decision, inbound −0.07) — outside row 8's ±6 by the storage decision alone |
+| Net profit | 448.71 (mockup, prep 1.20) | 458.96 | +10.25 | the same storage line |
+
+### The first 00:00 ET pass after the deploy
+
+Hourly passes since the fix (jobs #791 at 02:04 UTC and #792 at 03:04 UTC)
+ran 19 (30-day window, 2 chunks, 0 failed), 20 (1 call, ~420 transactions
+read, 3–5 deferred rows superseded) and 21 (16k-row rebuild) with no error.
+The 00:00 ET pass (05:04 UTC on 2026-11-21) with the three reports: **pending**
+— filled in below when it has run.
 
 ## Open items for Maria
 
