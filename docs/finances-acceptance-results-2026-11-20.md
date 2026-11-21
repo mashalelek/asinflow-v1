@@ -163,11 +163,19 @@ a failed chunk is recorded and the rest still run; the storage report is
 asked two newest + three missing months per pass; `postedBefore` 5 min
 behind now — the first hourly pull after the deploy had answered 400 at
 now − 60 s). The reports rerun `npm run backfill:finances -- --prod --from
-2025-01-20 --reports-only` is job #790 (started 02:19 UTC): returns 12/12
-chunks done; removals move at that report type's own quota, about one
-chunk an hour — the storage months and the rebuild follow it. The two
-lines that depend on it are marked **pending** below and get filled in when
-it ends. Figures read from production with `readBreakdown` (read-only).
+2025-01-20 --reports-only` ran as job #790 (02:19 → 05:21 UTC): returns
+12/12 chunks (1,138 rows), removals 12 chunks asked / 3 stored (142 rows;
+9 chunks failed — 8 "ended FATAL" with no reason document, 1 QuotaExceeded;
+the chunk holding August 2026, 2026-07-14..09-11, is among the stored
+ones), storage 5 months asked / 5 stored (2024-12, 2025-01, 2025-02,
+2026-09, 2026-10; 18 older months fill at three per nightly pass),
+`finances_daily` rebuilt from 2025-01-20 (158,244 rows). The removal order
+report refuses most 60-day windows outright (FATAL within seconds, no
+reason attached) — the windows 2025-03-21 … 2026-03-15, 2026-05-15 …
+2026-07-13 and 2026-09-12 … 2026-11-10 have no removal rows yet; a later
+`--reports-only` rerun at a quiet hour, or narrower windows, is the way to
+fill them (open item 5). Figures read from production with `readBreakdown`
+(read-only) after job #790.
 
 ### Row 2 and rows 4–7 — Aug 1 – 31, 2026, the account (production)
 
@@ -200,9 +208,9 @@ it ends. Figures read from production with `readBreakdown` (read-only).
 | **Amazon fees total** | **−11,912.24** | **−11,909.55** | **+2.69** | removal / disposal dating +2.76, storage rounding −0.05, the pending unit −0.02 — within row 4's $3 |
 | COGS | (in −17,319.08) | −16,210.44 | | row 6's −16,198.54 + 11.90 for the pending unit's COGS (its sale is counted); 1,231 of 1,232 units have a PO cost |
 | Prep | (in −17,319.08) | −1,376.00 | | the Settings rule (Velocity units × 1.20, hazmat × 2.20, Home × 0); SB's single line carries 1,115.50 of per-PO prep |
-| Disposal of sellable products | −10.66 | **pending** | | the removal order detail report for Aug 2026 is a later chunk of job #790; locally (same rule, same report) it was −10.66 |
+| Disposal of sellable products | −10.66 | −10.66 | 0.00 | removal order 2608211DBH, B001TLKXNS, completed 08-28 |
 | Lost/damaged by Amazon | −189.18 | −195.03 | −5.85 | 29 lost − 11 found units at the Settings prep 1.20 instead of SB's per-PO prep (accepted difference 1; −189.53 with the PO prep in the probe) |
-| Gross profit = Net profit | 3,742.38 | 3,487.20 | −255.18 | = the Prep difference (−260.50) + the returned-items / lost-damaged prep effects (−1.17) + fees +2.69 + the pending unit's COGS −11.90; moves by +10.66 when the disposal line lands |
+| Gross profit = Net profit | 3,742.38 | 3,476.54 | −265.84 | = the Prep difference (−260.50) + the returned-items / lost-damaged prep effects (−1.17) + fees +2.69 + the pending unit's COGS −11.90; SB's own figure includes the per-PO prep inside its COGS line |
 | Estimated payout | 21,000.67 | 21,003.36 | +2.69 | the fee Δ; within row 2's $3 |
 | Refund rate / Sellable returns | 2.68 % / 68.75 % | 2.60 % / 68.75 % | | 32 vs 33 refunds; the returns report agrees with SB on sellable units |
 
@@ -219,12 +227,12 @@ it ends. Figures read from production with `readBreakdown` (read-only).
 | Inbound transportation | −95.66 | −95.73 | −0.07 | the weight split over the shipments' contents (commit 0 (d)); within $5 |
 | Compensated clawback | −22.55 | −22.55 | 0.00 | |
 | Missing from inbound clawback | −22.55 | −22.55 | 0.00 | |
-| FBA storage fee | −10.33 | **pending** (will read −23.30) | | the storage fee report (October) is pulled by job #790 / the next nightly passes; by decision not amortized, the whole November 7 posting shows — SB's −10.33 is 13/31 of it (row 8's ±$1 cannot hold under that decision) |
+| FBA storage fee | −10.33 | −23.30 | −12.97 | by decision not amortized: the whole November 7 posting (October's storage report, 23 fulfilment-centre rows for the ASIN) shows; SB's −10.33 is 13/31 of it (row 8's ±$1 cannot hold under that decision) |
 | COGS | (in −1,104.46) | −1,066.46 | | = the acceptance figure exactly (cost period: 40.65 → 45.43 on 11-01) |
 | Prep | | −31.20 | | 26 Velocity units × 1.20 |
 | Lost/damaged by Amazon | +88.58 | +88.48 | −0.10 | two found units at 40.65 + 1.20 and 45.43 + 1.20 (SB's per-PO prep 1.50 / 1.00) |
-| Estimated payout | 1,457.89 (cash) | 1,468.14 | +10.25 | reads 1,444.84 once the storage line lands (−23.30 vs SB's −10.33: −12.97 by decision, inbound −0.07) — outside row 8's ±6 by the storage decision alone |
-| Net profit | 448.71 (mockup, prep 1.20) | 458.96 | +10.25 | the same storage line |
+| Estimated payout | 1,457.89 (cash) | 1,444.72 | −13.17 | storage −12.97 (by decision), inbound −0.07, referral −0.01, lost/damaged is not in the cash payout; outside row 8's ±6 by the storage decision alone |
+| Net profit | 448.71 (mockup, prep 1.20) | 435.54 | −13.17 | the same lines; Lost/damaged +88.48 vs the mockup's +88.48 |
 
 ### The first 00:00 ET pass after the deploy
 
@@ -243,5 +251,11 @@ The 00:00 ET pass (05:04 UTC on 2026-11-21) with the three reports: **pending**
    (1.20) per unit, so they sit a few dollars from SB's per-PO-prep figures.
 3. **The pending unit's COGS**: AF counts COGS for a pending unit it counts
    as a sale (August: +11.90); say if it should wait for the shipment.
-4. **Removal order report FATAL** when two requests overlap; the nightly
-   pass makes one — watch the first production 00:00 pass.
+4. **Removal order report FATAL.** Not only on overlap: on production most
+   60-day windows ended FATAL within seconds, with no reason document (3 of
+   12 stored in job #790, including the one holding August 2026). The
+   nightly pass asks for the trailing 60 days; the older windows need a
+   `--reports-only` rerun at a quiet hour, or narrower windows.
+5. **Older storage months** (18 of them, 2025-03 … 2026-08) fill at three
+   per nightly pass, oldest first; the per-ASIN storage split for those
+   months is 0 until then (the account line is the Finances row either way).
