@@ -23,23 +23,30 @@ export const actualFeesDeps = { ingestReturns, ingestRemovals, ingestStorageMont
 const addDays = (ymd: string, n: number) => new Date(Date.parse(`${ymd}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
 
 /** The Pacific-day range to rebuild and whether the reports are pulled, for a job. */
-export function rebuildPlanFor(params: Record<string, any> | null | undefined, includeDaily: boolean, now: Date = actualFeesDeps.now()): { from: string; to: string; reports: boolean; source: string } {
+/**
+ * `nightly` = the scheduled 00:00 pass (trigger 'scheduled' with the daily block). A Bulk Calc refresh or an onboarding job
+ * also carries include_daily, and must never pull the reports (job 786, 2026-11-21: a Bulk Calc refresh spent two hours in the
+ * storage report's quota waits and held lane M); they rebuild the hourly range only.
+ */
+export function rebuildPlanFor(params: Record<string, any> | null | undefined, nightly: boolean, now: Date = actualFeesDeps.now()): { from: string; to: string; reports: boolean; source: string } {
   const today = pacificDay(now.toISOString());
-  const w = financesWindowFor(params, includeDaily, now);
+  const w = financesWindowFor(params, nightly, now);
   if (w.source === "params") {
     const requested = String(params?.finances_window?.from);
     const clamped = pacificDay(w.from.toISOString());
     return { from: requested > clamped ? requested : clamped, to: today, reports: params?.finances_reports !== false, source: "params" };
   }
-  if (includeDaily) return { from: addDays(today, -REBUILD_DAILY_DAYS), to: today, reports: true, source: "daily" };
+  if (nightly) return { from: addDays(today, -REBUILD_DAILY_DAYS), to: today, reports: true, source: "daily" };
   return { from: addDays(today, -REBUILD_HOURLY_DAYS), to: today, reports: false, source: "hourly" };
 }
+/** The 00:00 scheduled pass, and nothing else (a bulk / onboarding / manual Refresh job with the daily block is not it). */
+export const isNightlyPass = (job: { trigger: string; include_daily: boolean }) => job.trigger === "scheduled" && job.include_daily;
 
 export const actualFees: ComponentDef = {
   n: 21, key: "21_actual_fees", name: "Actual fees charged", tier: "hourly", kind: "account",
   call: "rides 20's Finances pull; 00:00: customer returns, storage fee and removal order reports; rebuilds finances_daily",
   async run(ctx: ComponentContext): Promise<ComponentResult> {
-    const plan = rebuildPlanFor(ctx.job.params, ctx.job.include_daily);
+    const plan = rebuildPlanFor(ctx.job.params, isNightlyPass(ctx.job));
     const counts: Record<string, number> = {}; const outcomes: Record<string, string> = { _rebuild: `${plan.from}..${plan.to} (${plan.source})` };
     let failures = 0;
     if (plan.reports) {

@@ -38,7 +38,8 @@ export const refunds: ComponentDef = {
   n: 20, key: "20_refunds", name: "Refunds", tier: "hourly", kind: "account",
   call: "Finances listTransactions (posted window; one pull for 20 and 21)",
   async run(ctx: ComponentContext): Promise<ComponentResult> {
-    const w = financesWindowFor(ctx.job.params, ctx.job.include_daily);
+    // The 60-day window is the scheduled 00:00 pass's; a bulk / onboarding job with the daily block reads the hourly 3 days.
+    const w = financesWindowFor(ctx.job.params, ctx.job.trigger === "scheduled" && ctx.job.include_daily);
     ctx.log(`finances window ${w.from.toISOString()}..${w.to.toISOString()} (${w.source})`);
     const results: IngestResult[] = [];
     const chunked = w.source === "params";

@@ -1,7 +1,7 @@
 // Components 20 / 21 (Finances API patch commit 6): the windows per pass and the runs on seams — never a live call.
 import { describe, it, expect, beforeEach } from "vitest";
 import { refunds, refundsDeps, financesWindowFor, FINANCES_HOURLY_DAYS, FINANCES_DAILY_DAYS, FINANCES_WINDOW_KEY } from "./components/20-refunds";
-import { actualFees, actualFeesDeps, rebuildPlanFor, REBUILD_HOURLY_DAYS, REBUILD_DAILY_DAYS } from "./components/21-actual-fees";
+import { actualFees, actualFeesDeps, rebuildPlanFor, isNightlyPass, REBUILD_HOURLY_DAYS, REBUILD_DAILY_DAYS } from "./components/21-actual-fees";
 import { ComponentError, type ComponentContext, type JobRow } from "./types";
 
 const NOW = new Date("2026-11-20T18:00:00Z");
@@ -17,6 +17,12 @@ describe("financesWindowFor / rebuildPlanFor", () => {
     const p = financesWindowFor({ finances_window: { from: "2024-05-01", to: "2024-12-31" } }, false);
     expect(p.source).toBe("params"); expect(p.from.toISOString().slice(0, 10)).toBe("2024-11-21"); // 730 days back from NOW expect(p.to.toISOString()).toBe("2025-01-01T00:00:00.000Z");
     expect(financesWindowFor({ finances_window: { from: "bad" } }, false).source).toBe("hourly");
+  });
+  it("only the scheduled 00:00 pass is nightly — a Bulk Calc or onboarding job with the daily block is not (job 786)", () => {
+    expect(isNightlyPass({ trigger: "scheduled", include_daily: true })).toBe(true);
+    expect(isNightlyPass({ trigger: "scheduled", include_daily: false })).toBe(false);
+    expect(isNightlyPass({ trigger: "bulk", include_daily: true })).toBe(false);
+    expect(isNightlyPass({ trigger: "onboarding", include_daily: true })).toBe(false);
   });
   it("the rebuild covers 60 days hourly without reports, 120 days with the reports at 00:00, the whole window on a backfill", () => {
     expect(rebuildPlanFor(null, false)).toEqual({ from: "2026-09-21", to: "2026-11-20", reports: false, source: "hourly" });
@@ -53,6 +59,9 @@ describe("component 21", () => {
     actualFeesDeps.rebuildFinancesDaily = async (f, t) => { seen.push(`rebuild ${f}..${t}`); return { rows: 42 }; };
     const h = await actualFees.run(ctxFor(job()).ctx);
     expect(seen).toEqual(["rebuild 2026-09-21..2026-11-20"]); expect(h.counts.daily_rows).toBe(42);
+    seen.length = 0;
+    const bulk = await actualFees.run(ctxFor(job({ trigger: "bulk", include_daily: true })).ctx);
+    expect(seen).toEqual(["rebuild 2026-09-21..2026-11-20"]); expect(bulk.outcomes._returns).toBeUndefined(); // a Bulk Calc refresh never pulls the reports
     seen.length = 0;
     const d = await actualFees.run(ctxFor(job({ include_daily: true })).ctx);
     expect(seen[0]).toBe("returns 2026-09-21..2026-11-20"); expect(seen).toContain("storage 2026-10"); expect(seen).toContain("storage 2026-09"); expect(seen[seen.length - 1]).toBe("rebuild 2026-07-23..2026-11-20");

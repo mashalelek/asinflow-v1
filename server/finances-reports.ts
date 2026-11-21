@@ -24,7 +24,7 @@ export const REPORT_CHUNK_DAYS = 60;
 const POLL_MS = 15_000;
 const POLL_TIMEOUT_MS = 20 * 60_000;
 const QUOTA_WAIT_MS = 5 * 60_000;
-const QUOTA_MAX_WAITS = 6;
+const QUOTA_MAX_WAITS = 2; // 10 min, then the chunk / month is recorded as failed and asked again next pass (6 × 5 min held a job for hours, 2026-11-21)
 
 type QueryFn = (sql: string, params?: any[]) => Promise<any>;
 export interface ReportDeps {
