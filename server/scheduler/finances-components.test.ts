@@ -6,7 +6,8 @@ import { ComponentError, type ComponentContext, type JobRow } from "./types";
 
 const NOW = new Date("2026-11-20T18:00:00Z");
 const job = (over: Partial<JobRow> = {}): JobRow => ({ id: 7, kind: "refresh", trigger: "scheduled", target: "main", bulk_list_id: null, include_daily: false, scope_asins: null, components: null, params: null, status: "running", progress: { done: [] }, summary: null, requested_by: null, queued_at: NOW, started_at: NOW, finished_at: null, error: null, ...over });
-const ctxFor = (j: JobRow) => { const logs: string[] = []; const progress: any[] = []; const cache = new Map<string, unknown>(); const ctx: ComponentContext = { job: j, query: async () => ({ rows: [], rowCount: 0 }), log: (m) => logs.push(m), sellerId: "S", asins: [], scopeAsins: [], checkpoint: async () => {}, setProgress: async (p, t, u) => { progress.push([p, t, u]); }, cache }; return { ctx, logs, progress, cache }; };
+let storageMonthsHave: string[] = [];
+const ctxFor = (j: JobRow) => { const logs: string[] = []; const progress: any[] = []; const cache = new Map<string, unknown>(); const ctx: ComponentContext = { job: j, query: async (sql: string) => (/FROM fba_storage_fees/.test(sql) ? { rows: storageMonthsHave.map((month) => ({ month })), rowCount: storageMonthsHave.length } : { rows: [], rowCount: 0 }), log: (m) => logs.push(m), sellerId: "S", asins: [], scopeAsins: [], checkpoint: async () => {}, setProgress: async (p, t, u) => { progress.push([p, t, u]); }, cache }; return { ctx, logs, progress, cache }; };
 beforeEach(() => { refundsDeps.now = () => NOW; actualFeesDeps.now = () => NOW; });
 
 describe("financesWindowFor / rebuildPlanFor", () => {
@@ -55,7 +56,21 @@ describe("component 21", () => {
     seen.length = 0;
     const d = await actualFees.run(ctxFor(job({ include_daily: true })).ctx);
     expect(seen[0]).toBe("returns 2026-09-21..2026-11-20"); expect(seen).toContain("storage 2026-10"); expect(seen).toContain("storage 2026-09"); expect(seen[seen.length - 1]).toBe("rebuild 2026-07-23..2026-11-20");
+    expect(d.counts.storage_months_asked).toBe(3); // the newest two + the one older month the 120-day window wants (2026-08)
     expect(d.outcomes._removals).toMatch(/^error: quota/); expect(d.counts.report_failures).toBe(2); expect(d.counts.returns_rows).toBe(3); expect(d.counts.returns_chunks_failed).toBe(1); expect(d.outcomes["_returns_failed_01 2026-11-17..2026-11-20"]).toBe("error: report ended FATAL");
+  });
+  it("a backfill asks the newest two storage months plus three missing older ones per pass (the report quota), records a failed month and names the rest", async () => {
+    const asked: string[] = [];
+    actualFeesDeps.ingestReturns = async () => ({ chunks: 1, rows: 0, failed: [] });
+    actualFeesDeps.ingestRemovals = async () => ({ chunks: 1, rows: 0, failed: [] });
+    actualFeesDeps.ingestStorageMonth = async (m) => { asked.push(m); if (m === "2024-12") throw new Error("HTTP 429 QuotaExceeded"); return { rows: 1, total: 1 }; };
+    actualFeesDeps.rebuildFinancesDaily = async () => ({ rows: 1 });
+    storageMonthsHave = ["2024-10"];
+    const r = await actualFees.run(ctxFor(job({ params: { finances_window: { from: "2024-11-21", to: "2026-11-20" } } })).ctx);
+    expect(asked).toEqual(["2024-11", "2024-12", "2025-01", "2026-09", "2026-10"]); // 2024-10 is already there
+    expect(r.counts.storage_months_failed).toBe(1); expect(r.outcomes["_storage_failed_2024-12"]).toMatch(/^error: HTTP 429/);
+    expect(r.outcomes._storage_still_missing).toMatch(/^19 month\(s\) wait for later passes: 2025-02, 2025-03/); // 25 wanted − 1 held − 5 asked
+    storageMonthsHave = [];
   });
   it("a rebuild failure fails the component (ComponentError) with what ran before it", async () => {
     actualFeesDeps.rebuildFinancesDaily = async () => { throw new Error("57014"); };

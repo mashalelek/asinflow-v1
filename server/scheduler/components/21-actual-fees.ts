@@ -14,6 +14,8 @@ import { ComponentError, type ComponentDef, type ComponentContext, type Componen
 export const REBUILD_HOURLY_DAYS = 60;
 export const REBUILD_DAILY_DAYS = 120;
 export const REPORT_DAYS = 60;
+/** Older storage months filled per pass beyond the newest two (the report type's quota; 25 at once failed on 2026-11-21). */
+export const STORAGE_MONTHS_PER_PASS = 3;
 
 /** Test seam. */
 export const actualFeesDeps = { ingestReturns, ingestRemovals, ingestStorageMonth, rebuildFinancesDaily, now: () => new Date() };
@@ -55,13 +57,26 @@ export const actualFees: ComponentDef = {
       await step("returns", async () => chunked("returns", await actualFeesDeps.ingestReturns(from, today, { jobId: ctx.job.id, log: ctx.log })));
       await step("removals", async () => chunked("removals", await actualFeesDeps.ingestRemovals(from, today, { jobId: ctx.job.id, log: ctx.log })));
       await step("storage", async () => {
-        // Every month whose storage row can have posted in the range: the month before each posting month, from `from` to today.
-        const months = new Set<string>();
-        for (let d = from; d <= today; d = addDays(d, 28)) months.add(storageMonthFor(d));
-        months.add(storageMonthFor(today));
-        let rows = 0, total = 0;
-        for (const m of Array.from(months).sort()) { const r = await actualFeesDeps.ingestStorageMonth(m, { jobId: ctx.job.id, log: ctx.log }); rows += r.rows; total += r.total; counts[`storage_${m}`] = Math.round(r.total * 100) / 100; }
-        return { months: months.size, rows };
+        // The storage fee report's createReport quota is tight (job 784, 2026-11-21: 25 months asked at once → QuotaExceeded on the first).
+        // Wanted: every month whose row can have posted in the range. Asked this pass: the newest two wanted months plus the oldest
+        // STORAGE_MONTHS_PER_PASS months the table still lacks — the history fills over the nightly passes (self-healing); a month that
+        // fails is recorded and the next pass asks again.
+        const wanted = new Set<string>();
+        for (let d = from; d <= today; d = addDays(d, 28)) wanted.add(storageMonthFor(d));
+        wanted.add(storageMonthFor(today));
+        const have = new Set<string>((await ctx.query(`SELECT DISTINCT month FROM fba_storage_fees`)).rows.map((r: any) => String(r.month)));
+        const sorted = Array.from(wanted).sort();
+        const ask = new Set<string>(sorted.slice(-2));
+        for (const m of sorted) { if (ask.size >= 2 + STORAGE_MONTHS_PER_PASS) break; if (!have.has(m)) ask.add(m); }
+        let rows = 0, done = 0; const failed: string[] = [];
+        for (const m of Array.from(ask).sort()) {
+          try { const r = await actualFeesDeps.ingestStorageMonth(m, { jobId: ctx.job.id, log: ctx.log }); rows += r.rows; done++; counts[`storage_${m}`] = Math.round(r.total * 100) / 100; }
+          catch (err: any) { failed.push(m); outcomes[`_storage_failed_${m}`] = `error: ${err?.message ?? err}`; ctx.log(`storage ${m}: ${err?.message ?? err}`); }
+        }
+        const missing = sorted.filter((m) => !have.has(m) && !ask.has(m));
+        if (missing.length) outcomes._storage_still_missing = `${missing.length} month(s) wait for later passes: ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? "…" : ""}`;
+        if (failed.length) { failures += failed.length; counts.storage_months_failed = failed.length; }
+        return { months_asked: ask.size, months_done: done, months_missing: missing.length, rows };
       });
     }
     try {
