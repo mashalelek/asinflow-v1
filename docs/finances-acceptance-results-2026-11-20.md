@@ -236,11 +236,32 @@ fill them (open item 5). Figures read from production with `readBreakdown`
 
 ### The first 00:00 ET pass after the deploy
 
-Hourly passes since the fix (jobs #791 at 02:04 UTC and #792 at 03:04 UTC)
-ran 19 (30-day window, 2 chunks, 0 failed), 20 (1 call, ~420 transactions
-read, 3–5 deferred rows superseded) and 21 (16k-row rebuild) with no error.
-The 00:00 ET pass (05:04 UTC on 2026-11-21) with the three reports: **pending**
-— filled in below when it has run.
+Hourly passes since the fixes (jobs #791 02:04 UTC, #792 03:04, #793 04:04)
+ran 19 (30-day window, 1–2 chunks, 0 failed), 20 (1 call, ~420 transactions
+read, 3–5 deferred rows superseded) and 21 (16k-row rebuild) with no error
+and no FATAL.
+
+The 00:00 ET pass itself (job #794, 05:00 UTC, the daily block) **failed at
+component 19** at 06:52 UTC: the 30-day window had spilled into a one-day
+chunk for "today", the server's day (Eastern) was already Nov 21 while the
+Pacific day was still Nov 20, so the chunk's start (Pacific midnight,
+08:00Z) lay in the future and Amazon answered 400 — a window that only
+opens between 00:00 and 03:00 ET, exactly when the daily block ends.
+Components 20 and 21 and the three reports did not run in that job. Fixed
+and deployed at 06:58 UTC (`a4b5ac8`: the sales window is Pacific days and
+a chunk whose Pacific midnight is still ahead is skipped without a request;
+tests added). The reports step was run as a stand-in right after (job
+#796, `--reports-only --from 2026-09-22`, 06:59 → 07:04 UTC): customer
+returns 139 rows, storage months 2026-08 / 09 / 10 (8,105 rows, 0 missing
+in that range), the 60-day rebuild 16,499 rows — and the removal order
+report for 2026-09-22..11-20 **ended FATAL** again, with no reason
+document; the step recorded it and the job finished. So: 19–21 run clean on
+every hourly pass, the storage and returns reports run clean, the removal
+order report is the one report Amazon keeps refusing (open item 4). The
+next 00:00 ET pass (2026-11-22 05:00 UTC) is the first that runs the whole
+nightly step on the fixed code; its ledger row (`refresh_runs`, stage
+`21_actual_fees`, job trigger scheduled with the daily block) is the thing
+to read.
 
 ## Open items for Maria
 
