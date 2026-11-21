@@ -11,7 +11,7 @@ beforeEach(() => { refundsDeps.now = () => NOW; actualFeesDeps.now = () => NOW; 
 
 describe("financesWindowFor / rebuildPlanFor", () => {
   it("hourly = trailing 3 days; the 00:00 pass 60 days; a backfill window from params, clamped to Amazon's 730 days", () => {
-    const h = financesWindowFor(null, false); expect(h.source).toBe("hourly"); expect((h.to.getTime() - h.from.getTime()) / 86400_000).toBe(FINANCES_HOURLY_DAYS);
+    const h = financesWindowFor(null, false); expect(h.source).toBe("hourly"); expect((h.to.getTime() - h.from.getTime()) / 86400_000).toBe(FINANCES_HOURLY_DAYS); expect(NOW.getTime() - h.to.getTime()).toBe(5 * 60_000); // postedBefore 5 min behind now
     const d = financesWindowFor(null, true); expect(d.source).toBe("daily"); expect((d.to.getTime() - d.from.getTime()) / 86400_000).toBe(FINANCES_DAILY_DAYS);
     const p = financesWindowFor({ finances_window: { from: "2024-05-01", to: "2024-12-31" } }, false);
     expect(p.source).toBe("params"); expect(p.from.toISOString().slice(0, 10)).toBe("2024-11-21"); // 730 days back from NOW expect(p.to.toISOString()).toBe("2025-01-01T00:00:00.000Z");
@@ -46,7 +46,7 @@ describe("component 20", () => {
 describe("component 21", () => {
   it("hourly: rebuild only; 00:00: the three reports (storage for the months whose rows can have posted) then the rebuild; a report failure is an error outcome, the rebuild still runs", async () => {
     const seen: string[] = [];
-    actualFeesDeps.ingestReturns = async (f, t) => { seen.push(`returns ${f}..${t}`); return { chunks: 1, rows: 3 }; };
+    actualFeesDeps.ingestReturns = async (f, t) => { seen.push(`returns ${f}..${t}`); return { chunks: 2, rows: 3, failed: [{ from: "2026-11-17", to: "2026-11-20", error: "report ended FATAL" }] }; };
     actualFeesDeps.ingestRemovals = async () => { throw new Error("quota"); };
     actualFeesDeps.ingestStorageMonth = async (m) => { seen.push(`storage ${m}`); return { rows: 2, total: 1.5 }; };
     actualFeesDeps.rebuildFinancesDaily = async (f, t) => { seen.push(`rebuild ${f}..${t}`); return { rows: 42 }; };
@@ -55,7 +55,7 @@ describe("component 21", () => {
     seen.length = 0;
     const d = await actualFees.run(ctxFor(job({ include_daily: true })).ctx);
     expect(seen[0]).toBe("returns 2026-09-21..2026-11-20"); expect(seen).toContain("storage 2026-10"); expect(seen).toContain("storage 2026-09"); expect(seen[seen.length - 1]).toBe("rebuild 2026-07-23..2026-11-20");
-    expect(d.outcomes._removals).toMatch(/^error: quota/); expect(d.counts.report_failures).toBe(1); expect(d.counts.returns_rows).toBe(3);
+    expect(d.outcomes._removals).toMatch(/^error: quota/); expect(d.counts.report_failures).toBe(2); expect(d.counts.returns_rows).toBe(3); expect(d.counts.returns_chunks_failed).toBe(1); expect(d.outcomes["_returns_failed_01 2026-11-17..2026-11-20"]).toBe("error: report ended FATAL");
   });
   it("a rebuild failure fails the component (ComponentError) with what ran before it", async () => {
     actualFeesDeps.rebuildFinancesDaily = async () => { throw new Error("57014"); };

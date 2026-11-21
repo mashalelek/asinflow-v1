@@ -124,20 +124,24 @@ export async function storeReturns(rows: ReturnRow[], q: QueryFn): Promise<numbe
   }
   return rows.length;
 }
-export async function ingestReturns(from: string, to: string, opts: { jobId?: number | null; log?: (m: string) => void } = {}): Promise<{ chunks: number; rows: number }> {
+export interface ReportIngestResult { chunks: number; rows: number; /** Chunks that failed (window and reason); the others were stored. */ failed: { from: string; to: string; error: string }[] }
+
+export async function ingestReturns(from: string, to: string, opts: { jobId?: number | null; log?: (m: string) => void } = {}): Promise<ReportIngestResult> {
   const L = opts.log ?? ((m: string) => log(m, "finances"));
-  let rows = 0; const chunks = reportChunks(from, to);
+  let rows = 0; const chunks = reportChunks(from, to); const failed: ReportIngestResult["failed"] = [];
   for (const [a, b] of chunks) {
     const w = dayWindow(a, b);
-    const text = await fetchReport(RETURNS_REPORT, w.dataStartTime, w.dataEndTime, reportDeps, L);
-    const parsed = parseReturns(text);
-    await reportDeps.transaction(async (q) => {
-      await storeReturns(parsed, q);
-      await q(`INSERT INTO finances_ingest_log (source, window_from, window_to, rows_read, rows_written, calls, job_id) VALUES ('returns', $1, $2, $3, $3, 0, $4)`, [w.dataStartTime, w.dataEndTime, parsed.length, opts.jobId ?? null]);
-    });
-    rows += parsed.length; L(`returns ${a}..${b}: ${parsed.length} rows`);
+    try {
+      const text = await fetchReport(RETURNS_REPORT, w.dataStartTime, w.dataEndTime, reportDeps, L);
+      const parsed = parseReturns(text);
+      await reportDeps.transaction(async (q) => {
+        await storeReturns(parsed, q);
+        await q(`INSERT INTO finances_ingest_log (source, window_from, window_to, rows_read, rows_written, calls, job_id) VALUES ('returns', $1, $2, $3, $3, 0, $4)`, [w.dataStartTime, w.dataEndTime, parsed.length, opts.jobId ?? null]);
+      });
+      rows += parsed.length; L(`returns ${a}..${b}: ${parsed.length} rows`);
+    } catch (err: any) { failed.push({ from: a, to: b, error: err?.message ?? String(err) }); L(`returns ${a}..${b}: FAILED — ${err?.message ?? err}`); }
   }
-  return { chunks: chunks.length, rows };
+  return { chunks: chunks.length, rows, failed };
 }
 
 // ── Storage fees ───────────────────────────────────────────────────────────
@@ -195,21 +199,23 @@ export async function storeRemovals(rows: RemovalRow[], q: QueryFn): Promise<num
   }
   return rows.length;
 }
-export async function ingestRemovals(from: string, to: string, opts: { jobId?: number | null; log?: (m: string) => void; skuMap?: Map<string, string> } = {}): Promise<{ chunks: number; rows: number }> {
+export async function ingestRemovals(from: string, to: string, opts: { jobId?: number | null; log?: (m: string) => void; skuMap?: Map<string, string> } = {}): Promise<ReportIngestResult> {
   const L = opts.log ?? ((m: string) => log(m, "finances"));
   const skuMap = opts.skuMap ?? (await loadSkuMapForReports());
-  let rows = 0; const chunks = reportChunks(from, to);
+  let rows = 0; const chunks = reportChunks(from, to); const failed: ReportIngestResult["failed"] = [];
   for (const [a, b] of chunks) {
     const w = dayWindow(a, b);
-    const text = await fetchReport(REMOVALS_REPORT, w.dataStartTime, w.dataEndTime, reportDeps, L);
-    const parsed = parseRemovals(text, (sku) => skuMap.get(sku) ?? null);
-    await reportDeps.transaction(async (q) => {
-      await storeRemovals(parsed, q);
-      await q(`INSERT INTO finances_ingest_log (source, window_from, window_to, rows_read, rows_written, calls, job_id) VALUES ('removals', $1, $2, $3, $3, 0, $4)`, [w.dataStartTime, w.dataEndTime, parsed.length, opts.jobId ?? null]);
-    });
-    rows += parsed.length; L(`removals ${a}..${b}: ${parsed.length} rows`);
+    try {
+      const text = await fetchReport(REMOVALS_REPORT, w.dataStartTime, w.dataEndTime, reportDeps, L);
+      const parsed = parseRemovals(text, (sku) => skuMap.get(sku) ?? null);
+      await reportDeps.transaction(async (q) => {
+        await storeRemovals(parsed, q);
+        await q(`INSERT INTO finances_ingest_log (source, window_from, window_to, rows_read, rows_written, calls, job_id) VALUES ('removals', $1, $2, $3, $3, 0, $4)`, [w.dataStartTime, w.dataEndTime, parsed.length, opts.jobId ?? null]);
+      });
+      rows += parsed.length; L(`removals ${a}..${b}: ${parsed.length} rows`);
+    } catch (err: any) { failed.push({ from: a, to: b, error: err?.message ?? String(err) }); L(`removals ${a}..${b}: FAILED — ${err?.message ?? err}`); }
   }
-  return { chunks: chunks.length, rows };
+  return { chunks: chunks.length, rows, failed };
 }
 async function loadSkuMapForReports(q: QueryFn = defaultQuery as any): Promise<Map<string, string>> {
   const m = new Map<string, string>();

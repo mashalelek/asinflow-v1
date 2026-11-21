@@ -121,7 +121,12 @@ export async function fetchTransactions(postedAfter: string, postedBefore: strin
   do {
     const params: Record<string, any> = { postedAfter, postedBefore, marketplaceId: MARKETPLACE_ID };
     if (next) params.nextToken = next;
-    const data = await financesDeps.get(params);
+    let data: any;
+    try { data = await financesDeps.get(params); }
+    catch (err: any) {
+      const body = err?.response?.data ? JSON.stringify(err.response.data).slice(0, 300) : "";
+      throw new Error(`listTransactions ${postedAfter}..${postedBefore}${next ? " (page " + (calls + 1) + ")" : ""}: HTTP ${err?.response?.status ?? "?"} ${body || (err?.message ?? err)}`);
+    }
     calls++;
     const payload = data?.payload ?? data ?? {};
     for (const tx of payload.transactions ?? []) transactions.push(tx);

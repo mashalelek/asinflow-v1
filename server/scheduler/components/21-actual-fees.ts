@@ -47,8 +47,13 @@ export const actualFees: ComponentDef = {
         try { const r = await fn(); for (const [k, v] of Object.entries(r)) counts[`${name}_${k}`] = v; outcomes[`_${name}`] = Object.entries(r).map(([k, v]) => `${k} ${v}`).join(" · "); }
         catch (err: any) { failures++; outcomes[`_${name}`] = `error: ${err?.message ?? err}`; ctx.log(`${name}: ${err?.message ?? err}`); }
       };
-      await step("returns", async () => { const r = await actualFeesDeps.ingestReturns(from, today, { jobId: ctx.job.id, log: ctx.log }); return { chunks: r.chunks, rows: r.rows }; });
-      await step("removals", async () => { const r = await actualFeesDeps.ingestRemovals(from, today, { jobId: ctx.job.id, log: ctx.log }); return { chunks: r.chunks, rows: r.rows }; });
+      const chunked = async (name: string, r: { chunks: number; rows: number; failed: { from: string; to: string; error: string }[] }) => {
+        r.failed.forEach((f, i) => { outcomes[`_${name}_failed_${String(i + 1).padStart(2, "0")} ${f.from}..${f.to}`] = `error: ${f.error}`; });
+        if (r.failed.length) { failures += r.failed.length; counts[`${name}_chunks_failed`] = r.failed.length; }
+        return { chunks: r.chunks, rows: r.rows };
+      };
+      await step("returns", async () => chunked("returns", await actualFeesDeps.ingestReturns(from, today, { jobId: ctx.job.id, log: ctx.log })));
+      await step("removals", async () => chunked("removals", await actualFeesDeps.ingestRemovals(from, today, { jobId: ctx.job.id, log: ctx.log })));
       await step("storage", async () => {
         // Every month whose storage row can have posted in the range: the month before each posting month, from `from` to today.
         const months = new Set<string>();

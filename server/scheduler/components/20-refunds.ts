@@ -14,6 +14,7 @@ import { ComponentError, type ComponentDef, type ComponentContext, type Componen
 export const FINANCES_HOURLY_DAYS = 3;
 export const FINANCES_DAILY_DAYS = 60;
 export const FINANCES_WINDOW_KEY = "financesWindow";
+export const FINANCES_POSTED_BEFORE_LAG_MS = 5 * 60_000;
 
 /** Test seam. */
 export const refundsDeps = { ingestRange, now: () => new Date() };
@@ -22,7 +23,8 @@ const YMD = /^\d{4}-\d{2}-\d{2}$/;
 /** The posted window for a job: params.finances_window when valid (clamped to Amazon's retention), else trailing days by pass. */
 export function financesWindowFor(params: Record<string, any> | null | undefined, includeDaily: boolean, now: Date = refundsDeps.now()): { from: Date; to: Date; source: "params" | "hourly" | "daily" } {
   const w = params?.finances_window;
-  const to = new Date(now.getTime() - 60_000);
+  // postedBefore must sit a few minutes behind now (Amazon answers 400 otherwise — the 23:56 UTC hourly pass on 2026-11-20 with now − 60 s); 5 minutes.
+  const to = new Date(now.getTime() - FINANCES_POSTED_BEFORE_LAG_MS);
   if (w && typeof w === "object" && YMD.test(String(w.from)) && YMD.test(String(w.to)) && String(w.from) <= String(w.to)) {
     const from = new Date(Math.max(Date.parse(`${w.from}T00:00:00Z`), retentionStart(now).getTime()));
     const end = new Date(Math.min(Date.parse(`${w.to}T00:00:00Z`) + 86400_000, to.getTime()));

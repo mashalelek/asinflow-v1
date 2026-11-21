@@ -6,7 +6,7 @@
 // Idempotent: every window replaces what it holds. Needs a running server
 // (its runner executes the queue; on production Render's server does).
 //
-//   npm run backfill:finances [-- --from YYYY-MM-DD --to YYYY-MM-DD --prod]
+//   npm run backfill:finances [-- --from YYYY-MM-DD --to YYYY-MM-DD --prod [--reports-only]]
 import "./env";
 import pool from "../server/db";
 import { enqueueJob, listActive } from "../server/scheduler/jobs-repo";
@@ -24,9 +24,11 @@ async function main() {
   if ("error" in w) { console.error(w.error); process.exit(1); }
   if (w.from < earliest) console.log(`note: Amazon keeps 730 days — ${w.from} is clamped to ${earliest} for the Finances pull`);
   const query = (sql: string, params?: any[]) => pool.query(sql, params);
+  // --reports-only: component 21 alone — the three reports for the window and the finances_daily rebuild from `from` (a rerun after a FATAL report).
+  const reportsOnly = process.argv.includes("--reports-only");
   const job = await enqueueJob({
-    trigger: "manual", includeDaily: false, components: [19, 20, 21], scopeAsins: null,
-    params: { sales_window: { from: w.from, to: w.to }, finances_window: { from: w.from, to: w.to }, finances_reports: true },
+    trigger: "manual", includeDaily: false, components: reportsOnly ? [21] : [19, 20, 21], scopeAsins: null,
+    params: { ...(reportsOnly ? {} : { sales_window: { from: w.from, to: w.to } }), finances_window: { from: w.from, to: w.to }, finances_reports: true },
   }, query as any);
   const active = await listActive(query as any);
   const ahead = active.filter((j) => j.id !== job.id && (j.status === "running" || j.queued_at < job.queued_at)).length;
