@@ -32,7 +32,7 @@ async function main() {
   }, query as any);
   const active = await listActive(query as any);
   const ahead = active.filter((j) => j.id !== job.id && (j.status === "running" || j.queued_at < job.queued_at)).length;
-  console.log(`backfill job #${job.id} queued: orders report + Finances + reports ${w.from}..${w.to}, ${ahead} job(s) ahead. Watch the jobs dialog; the ledger rows are refresh_runs WHERE job_id = ${job.id}.`);
+  console.log(`backfill job #${job.id} queued: ${reportsOnly ? "the three reports + the finances_daily rebuild" : "orders report + Finances + reports"} ${w.from}..${w.to}, ${ahead} job(s) ahead. Watch the jobs dialog; the ledger rows are refresh_runs WHERE job_id = ${job.id}.`);
   await pool.end();
 }
 
