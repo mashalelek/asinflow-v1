@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { dayWindow, fetchReport, parseRemovals, parseReturns, parseStorage, parseTsv, reportChunks, splitByWeight, storageMonthFor, storeRemovals, storeReturns, storeStorage, type ReportDeps } from "./finances-reports";
+import { dayWindow, ensureReportSpacing, fetchReport, ingestRemovals, missingRemovalWindows, NEAR_REALTIME_SPACING_MS, LAST_REQUEST_KEY, REMOVALS_REPORT, reportDeps, parseRemovals, parseReturns, parseStorage, parseTsv, reportChunks, splitByWeight, storageMonthFor, storeRemovals, storeReturns, storeStorage, type ReportDeps } from "./finances-reports";
 
 const fx = (n: string) => fs.readFileSync(path.join(__dirname, "__fixtures__", "finances", n), "utf8");
 
@@ -82,5 +82,42 @@ describe("store* write the rows as received (SQL recorded)", () => {
     expect(b.sql[0].text).toMatch(/DELETE FROM fba_storage_fees WHERE month = \$1/); expect(b.sql.length).toBe(9);
     const c = rec(); await storeRemovals(parseRemovals(fx("removals-aug.tsv")), c.q);
     expect(c.sql[0].text).toMatch(/ON CONFLICT \(order_id, sku, disposition\)/);
+  });
+});
+
+describe("removal order report: one request per 30 minutes (docs/finances-removal-report-2026-11-21.md)", () => {
+  const settingsStore = new Map<string, string>();
+  const q = async (sql: string, params?: any[]) => {
+    if (/SELECT value FROM settings/.test(sql)) { const v = settingsStore.get(params![0]); return { rows: v ? [{ value: v }] : [], rowCount: v ? 1 : 0 }; }
+    if (/INSERT INTO settings/.test(sql)) { settingsStore.set(params![0], params![1]); return { rows: [], rowCount: 1 }; }
+    if (/finances_ingest_log WHERE source = 'removals'/.test(sql)) return { rows: [{ f: "2026-07-14T00:00:00Z", t: "2026-09-11T23:59:59Z" }, { f: "2024-11-21T00:00:00Z", t: "2025-01-19T23:59:59Z" }], rowCount: 2 };
+    if (/asin_skus/.test(sql)) return { rows: [], rowCount: 0 };
+    return { rows: [], rowCount: 1 };
+  };
+  it("ensureReportSpacing waits the remainder of 31 minutes since the type's last request, then stamps now; nothing to wait on the first request", async () => {
+    settingsStore.clear(); const slept: number[] = []; reportDeps.sleep = async (ms) => { slept.push(ms); };
+    expect(await ensureReportSpacing(REMOVALS_REPORT, q, () => {})).toBe(0); expect(slept).toEqual([]);
+    settingsStore.set(LAST_REQUEST_KEY(REMOVALS_REPORT), new Date(Date.now() - 10 * 60_000).toISOString());
+    const w = await ensureReportSpacing(REMOVALS_REPORT, q, () => {});
+    expect(w).toBeGreaterThan(20 * 60_000); expect(w).toBeLessThanOrEqual(NEAR_REALTIME_SPACING_MS); expect(slept.length).toBe(1);
+    expect(Date.now() - Date.parse(settingsStore.get(LAST_REQUEST_KEY(REMOVALS_REPORT))!)).toBeLessThan(5000);
+  });
+  it("a FATAL after proper spacing is asked once more after another spacing; a second FATAL is recorded; an empty (header-only) report is a stored empty window", async () => {
+    settingsStore.clear(); reportDeps.sleep = async () => {}; reportDeps.transaction = async (fn) => fn(q as any);
+    let calls = 0;
+    reportDeps.post = async () => ({ reportId: `R${++calls}` });
+    reportDeps.get = async (e) => (e.includes("/reports/R") ? { processingStatus: calls === 1 ? "FATAL" : "DONE", reportDocumentId: calls === 1 ? undefined : "D" } : { url: "u" });
+    reportDeps.download = async () => Buffer.from("request-date\torder-id\tsku\n");
+    const r = await ingestRemovals("2025-02-01", "2025-02-07", { q, log: () => {} });
+    expect(calls).toBe(2); expect(r).toEqual({ chunks: 1, rows: 0, failed: [] });
+    calls = 0; reportDeps.get = async (e) => (e.includes("/reports/R") ? { processingStatus: "FATAL" } : { url: "u" });
+    const r2 = await ingestRemovals("2025-02-01", "2025-02-07", { q, log: () => {} });
+    expect(calls).toBe(2); expect(r2.failed.length).toBe(1); expect(r2.failed[0].error).toMatch(/ended FATAL/);
+  });
+  it("missingRemovalWindows lists the ≤ 60-day windows no successful ingest covers", async () => {
+    const m = await missingRemovalWindows("2024-11-21", "2026-11-20", q);
+    expect(m[0]).toEqual(["2025-01-20", "2025-03-20"]); // the first window is covered
+    expect(m.some(([a]) => a === "2026-07-14")).toBe(false); // covered by the stored 07-14..09-11 window
+    expect(m.length).toBe(11);
   });
 });

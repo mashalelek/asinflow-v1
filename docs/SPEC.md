@@ -2655,14 +2655,28 @@ answer keys `docs/claude_finances-sb-fixture.md`; acceptance
   takes none; `po_asins.prep_cost` is not read). `sales_daily.units_refunded`
   / `refund_amount` follow the aggregate; the three `actual_*` fee columns
   are gone (migration 124).
-- **Reports (21 at 00:00; `server/finances-reports.ts`).**
-  `GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA` and
-  `GET_FBA_FULFILLMENT_REMOVAL_ORDER_DETAIL_DATA` for the trailing 60 days
-  (≤ 60-day requests, the end clamped to now — a future `dataEndTime` ends
-  the report FATAL), `GET_FBA_STORAGE_FEE_CHARGES_DATA` for every month whose
-  row can have posted in the range; rows stored as received in
+- **Reports (21 at the scheduled 00:00 pass only; `server/finances-reports.ts`).**
+  `GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA` for the trailing 60 days (≤
+  60-day requests, the end clamped to now — a future `dataEndTime` ends the
+  report FATAL); `GET_FBA_FULFILLMENT_REMOVAL_ORDER_DETAIL_DATA` — a
+  **near-real-time** report Amazon generates **no more than once every 30
+  minutes**: a second request of the type inside that window ends FATAL
+  within seconds with no document (`docs/finances-removal-report-2026-11-21.md`),
+  so every request is spaced 31 minutes from the type's last one (the stamp
+  in `settings` `reports.last_request.<type>` holds across jobs and
+  restarts), a FATAL after proper spacing is asked once more, an empty
+  window is a DONE header-only report (stored as an empty window), and the
+  window filters on **request-date**; the nightly pass asks the trailing 60
+  days plus ONE older window no successful ingest covers yet (the
+  `finances_ingest_log` rows are the coverage ledger, back to Amazon's 730
+  days) so the history fills itself, `npm run backfill:finances -- --prod
+  --from … --removals-only` asks every missing window of a range at that
+  pace; `GET_FBA_STORAGE_FEE_CHARGES_DATA` for the two newest months whose
+  row can have posted in the range plus three missing older months per pass
+  (its `createReport` quota refused 25 at once). Rows stored as received in
   `fba_customer_returns`, `fba_removals` (upserts) and `fba_storage_fees`
-  (the month replaced).
+  (the month replaced). A Bulk Calc or onboarding job with the daily block
+  never pulls the reports (job 786 held lane M two hours in quota waits).
 - **Passes.** Hourly: 19 (30 days), 20 (3 posted days), 21 (rebuild 60
   days). 00:00: 20 (60 posted days), 21 (the three reports, rebuild 120
   days). Backfill: `npm run backfill:finances [-- --from --to --prod]` /

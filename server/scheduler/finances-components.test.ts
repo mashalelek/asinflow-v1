@@ -55,6 +55,7 @@ describe("component 21", () => {
     const seen: string[] = [];
     actualFeesDeps.ingestReturns = async (f, t) => { seen.push(`returns ${f}..${t}`); return { chunks: 2, rows: 3, failed: [{ from: "2026-11-17", to: "2026-11-20", error: "report ended FATAL" }] }; };
     actualFeesDeps.ingestRemovals = async () => { throw new Error("quota"); };
+    actualFeesDeps.missingRemovalWindows = async () => [];
     actualFeesDeps.ingestStorageMonth = async (m) => { seen.push(`storage ${m}`); return { rows: 2, total: 1.5 }; };
     actualFeesDeps.rebuildFinancesDaily = async (f, t) => { seen.push(`rebuild ${f}..${t}`); return { rows: 42 }; };
     const h = await actualFees.run(ctxFor(job()).ctx);
@@ -68,10 +69,25 @@ describe("component 21", () => {
     expect(d.counts.storage_months_asked).toBe(3); // the newest two + the one older month the 120-day window wants (2026-08)
     expect(d.outcomes._removals).toMatch(/^error: quota/); expect(d.counts.report_failures).toBe(2); expect(d.counts.returns_rows).toBe(3); expect(d.counts.returns_chunks_failed).toBe(1); expect(d.outcomes["_returns_failed_01 2026-11-17..2026-11-20"]).toBe("error: report ended FATAL");
   });
+  it("the nightly pass asks the removal order report for the trailing window and ONE older window no ingest covers yet; a backfill asks only its own range", async () => {
+    const asked: string[] = [];
+    actualFeesDeps.ingestReturns = async () => ({ chunks: 1, rows: 0, failed: [] });
+    actualFeesDeps.ingestRemovals = async (f, t) => { asked.push(`${f}..${t}`); return { chunks: 1, rows: 1, failed: [] }; };
+    actualFeesDeps.ingestStorageMonth = async () => ({ rows: 0, total: 0 });
+    actualFeesDeps.rebuildFinancesDaily = async () => ({ rows: 1 });
+    actualFeesDeps.missingRemovalWindows = async () => [["2025-03-21", "2025-05-19"], ["2026-01-15", "2026-03-15"]];
+    const r = await actualFees.run(ctxFor(job({ include_daily: true })).ctx);
+    expect(asked).toEqual(["2026-09-21..2026-11-20", "2026-01-15..2026-03-15"]); expect(r.counts.removals_chunks).toBe(2);
+    expect(r.outcomes._removals_older_missing).toMatch(/^1 older window\(s\) wait for later passes/);
+    asked.length = 0;
+    const b = await actualFees.run(ctxFor(job({ params: { finances_window: { from: "2025-03-21", to: "2026-11-20" }, finances_reports: "removals" } })).ctx);
+    expect(asked).toEqual(["2025-03-21..2026-11-20"]); expect(b.outcomes._returns).toBeUndefined(); expect(b.outcomes._storage).toBeUndefined();
+  });
   it("a backfill asks the newest two storage months plus three missing older ones per pass (the report quota), records a failed month and names the rest", async () => {
     const asked: string[] = [];
     actualFeesDeps.ingestReturns = async () => ({ chunks: 1, rows: 0, failed: [] });
     actualFeesDeps.ingestRemovals = async () => ({ chunks: 1, rows: 0, failed: [] });
+    actualFeesDeps.missingRemovalWindows = async () => [];
     actualFeesDeps.ingestStorageMonth = async (m) => { asked.push(m); if (m === "2024-12") throw new Error("HTTP 429 QuotaExceeded"); return { rows: 1, total: 1 }; };
     actualFeesDeps.rebuildFinancesDaily = async () => ({ rows: 1 });
     storageMonthsHave = ["2024-10"];

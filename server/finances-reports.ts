@@ -199,23 +199,55 @@ export async function storeRemovals(rows: RemovalRow[], q: QueryFn): Promise<num
   }
   return rows.length;
 }
-export async function ingestRemovals(from: string, to: string, opts: { jobId?: number | null; log?: (m: string) => void; skuMap?: Map<string, string> } = {}): Promise<ReportIngestResult> {
+/**
+ * Near-real-time FBA reports (both removal reports) are "generated no more than once every 30 minutes" (Amazon's FBA report
+ * page); a second request of the type inside that window ends FATAL within seconds, with no document — the cause of every
+ * FATAL in jobs 784 / 790 / 796 (`docs/finances-removal-report-2026-11-21.md`). An empty window is a DONE header-only report.
+ * The last request time per type is kept in `settings` so the spacing holds across jobs, passes, scripts and restarts.
+ */
+export const NEAR_REALTIME_SPACING_MS = 31 * 60_000;
+export const LAST_REQUEST_KEY = (type: string) => `reports.last_request.${type}`;
+/** Wait until `spacing` has passed since the type's last request (any process), then stamp now. */
+export async function ensureReportSpacing(type: string, q: QueryFn, L: (m: string) => void, spacing = NEAR_REALTIME_SPACING_MS): Promise<number> {
+  const row = (await q(`SELECT value FROM settings WHERE key = $1`, [LAST_REQUEST_KEY(type)])).rows[0];
+  const last = row ? Date.parse(typeof row.value === "string" ? row.value : JSON.stringify(row.value).replace(/"/g, "")) : NaN;
+  const now = Date.now();
+  const wait = Number.isFinite(last) ? Math.max(0, last + spacing - now) : 0;
+  if (wait > 0) { L(`${type}: last asked ${Math.round((now - last) / 60_000)} min ago — waiting ${Math.ceil(wait / 60_000)} min (one request per 30 min)`); await reportDeps.sleep(wait); }
+  await q(`INSERT INTO settings (key, value, updated_at) VALUES ($1, to_jsonb($2::text), NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [LAST_REQUEST_KEY(type), new Date().toISOString()]);
+  return wait;
+}
+
+export async function ingestRemovals(from: string, to: string, opts: { jobId?: number | null; log?: (m: string) => void; skuMap?: Map<string, string>; q?: QueryFn } = {}): Promise<ReportIngestResult> {
   const L = opts.log ?? ((m: string) => log(m, "finances"));
-  const skuMap = opts.skuMap ?? (await loadSkuMapForReports());
+  const q: QueryFn = opts.q ?? (defaultQuery as any);
+  const skuMap = opts.skuMap ?? (await loadSkuMapForReports(q));
   let rows = 0; const chunks = reportChunks(from, to); const failed: ReportIngestResult["failed"] = [];
   for (const [a, b] of chunks) {
     const w = dayWindow(a, b);
     try {
-      const text = await fetchReport(REMOVALS_REPORT, w.dataStartTime, w.dataEndTime, reportDeps, L);
-      const parsed = parseRemovals(text, (sku) => skuMap.get(sku) ?? null);
-      await reportDeps.transaction(async (q) => {
-        await storeRemovals(parsed, q);
-        await q(`INSERT INTO finances_ingest_log (source, window_from, window_to, rows_read, rows_written, calls, job_id) VALUES ('removals', $1, $2, $3, $3, 0, $4)`, [w.dataStartTime, w.dataEndTime, parsed.length, opts.jobId ?? null]);
+      let text: string | null = null;
+      // Spaced per the 30-minute rule; a FATAL that still comes is asked once more after another spacing, then recorded.
+      for (let attempt = 0; attempt < 2 && text == null; attempt++) {
+        await ensureReportSpacing(REMOVALS_REPORT, q, L);
+        try { text = await fetchReport(REMOVALS_REPORT, w.dataStartTime, w.dataEndTime, reportDeps, L); }
+        catch (err: any) { if (attempt === 0 && /ended FATAL/.test(err?.message ?? "")) { L(`removals ${a}..${b}: FATAL — once more after the spacing`); continue; } throw err; }
+      }
+      const parsed = parseRemovals(text!, (sku) => skuMap.get(sku) ?? null);
+      await reportDeps.transaction(async (tq) => {
+        await storeRemovals(parsed, tq);
+        await tq(`INSERT INTO finances_ingest_log (source, window_from, window_to, rows_read, rows_written, calls, job_id) VALUES ('removals', $1, $2, $3, $3, 0, $4)`, [w.dataStartTime, w.dataEndTime, parsed.length, opts.jobId ?? null]);
       });
       rows += parsed.length; L(`removals ${a}..${b}: ${parsed.length} rows`);
     } catch (err: any) { failed.push({ from: a, to: b, error: err?.message ?? String(err) }); L(`removals ${a}..${b}: FAILED — ${err?.message ?? err}`); }
   }
   return { chunks: chunks.length, rows, failed };
+}
+
+/** The ≤ 60-day windows of [from, to] that no successful removals ingest covers yet (finances_ingest_log, source 'removals'). */
+export async function missingRemovalWindows(from: string, to: string, q: QueryFn = defaultQuery as any): Promise<[string, string][]> {
+  const covered = (await q(`SELECT window_from::text AS f, window_to::text AS t FROM finances_ingest_log WHERE source = 'removals'`)).rows.map((r: any) => ({ f: String(r.f).slice(0, 10), t: String(r.t).slice(0, 10) }));
+  return reportChunks(from, to).filter(([a, b]) => !covered.some((c: { f: string; t: string }) => c.f <= a && c.t >= b));
 }
 async function loadSkuMapForReports(q: QueryFn = defaultQuery as any): Promise<Map<string, string>> {
   const m = new Map<string, string>();

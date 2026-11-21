@@ -6,7 +6,7 @@
 // Idempotent: every window replaces what it holds. Needs a running server
 // (its runner executes the queue; on production Render's server does).
 //
-//   npm run backfill:finances [-- --from YYYY-MM-DD --to YYYY-MM-DD --prod [--reports-only]]
+//   npm run backfill:finances [-- --from YYYY-MM-DD --to YYYY-MM-DD --prod [--reports-only | --removals-only]]
 import "./env";
 import pool from "../server/db";
 import { enqueueJob, listActive } from "../server/scheduler/jobs-repo";
@@ -25,14 +25,16 @@ async function main() {
   if (w.from < earliest) console.log(`note: Amazon keeps 730 days — ${w.from} is clamped to ${earliest} for the Finances pull`);
   const query = (sql: string, params?: any[]) => pool.query(sql, params);
   // --reports-only: component 21 alone — the three reports for the window and the finances_daily rebuild from `from` (a rerun after a FATAL report).
-  const reportsOnly = process.argv.includes("--reports-only");
+  const removalsOnly = process.argv.includes("--removals-only");
+  const reportsOnly = removalsOnly || process.argv.includes("--reports-only");
+  // --removals-only: the removal order report alone over the window (one request per 30 minutes, so 10 windows ≈ 5 h) + the rebuild.
   const job = await enqueueJob({
     trigger: "manual", includeDaily: false, components: reportsOnly ? [21] : [19, 20, 21], scopeAsins: null,
-    params: { ...(reportsOnly ? {} : { sales_window: { from: w.from, to: w.to } }), finances_window: { from: w.from, to: w.to }, finances_reports: true },
+    params: { ...(reportsOnly ? {} : { sales_window: { from: w.from, to: w.to } }), finances_window: { from: w.from, to: w.to }, finances_reports: removalsOnly ? "removals" : true },
   }, query as any);
   const active = await listActive(query as any);
   const ahead = active.filter((j) => j.id !== job.id && (j.status === "running" || j.queued_at < job.queued_at)).length;
-  console.log(`backfill job #${job.id} queued: ${reportsOnly ? "the three reports + the finances_daily rebuild" : "orders report + Finances + reports"} ${w.from}..${w.to}, ${ahead} job(s) ahead. Watch the jobs dialog; the ledger rows are refresh_runs WHERE job_id = ${job.id}.`);
+  console.log(`backfill job #${job.id} queued: ${removalsOnly ? "the removal order report (one request per 30 min) + the finances_daily rebuild" : reportsOnly ? "the three reports + the finances_daily rebuild" : "orders report + Finances + reports"} ${w.from}..${w.to}, ${ahead} job(s) ahead. Watch the jobs dialog; the ledger rows are refresh_runs WHERE job_id = ${job.id}.`);
   await pool.end();
 }
 
