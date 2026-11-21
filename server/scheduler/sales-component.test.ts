@@ -49,6 +49,8 @@ describe("salesWindowFor", () => {
   it("falls back to the trailing 30 days otherwise (Finances patch §3: cancellations weeks later)", () => {
     const now = new Date(2026, 9, 16, 12, 0, 0);
     expect(salesWindowFor(null, now)).toEqual({ start: "2026-09-16", end: "2026-10-16", source: "default" });
+    // Pacific days: 01:52 ET on Nov 21 is still Nov 20 in Los Angeles (job 794)
+    expect(salesWindowFor(null, new Date("2026-11-21T06:52:00Z"))).toEqual({ start: "2026-10-21", end: "2026-11-20", source: "default" });
     expect(salesWindowFor({ sales_window: { from: "bad", to: "2026-10-16" } }, now).source).toBe("default");
     expect(salesWindowFor({ sales_window: { from: "2026-10-17", to: "2026-10-16" } }, now).source).toBe("default");
     expect(SALES_WINDOW_DAYS).toBe(30);

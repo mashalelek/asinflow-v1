@@ -248,6 +248,12 @@ async function fetchChunk(
 ): Promise<{ chunk: SalesChunkResult; dates: Set<string>; asins: Set<string> }> {
   // 1. Create report — Pacific day boundaries, as UTC (D7).
   const window = reportWindowUtc(startDate, endDate);
+  // A chunk whose Pacific midnight has not come yet (the 30-day window's last day asked before 00:00 Pacific) has nothing
+  // to report and Amazon refuses it (400): an empty chunk, no request, the stored rows untouched.
+  if (Date.parse(window.dataStartTime) >= salesDb.now().getTime()) {
+    log(`Chunk ${startDate}-${endDate}: starts in the future (${window.dataStartTime}) — skipped`, "sales-sync");
+    return { chunk: { start: startDate, end: endDate, status: "empty", orders: 0, distinctOrders: 0, days: 0, asins: 0, onboarded: [], invalidAsins: [], minDate: null, maxDate: null }, dates: new Set<string>(), asins: new Set<string>() };
+  }
   const createRes = await spApiPost("/reports/2021-06-30/reports", {
     reportType: "GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL",
     marketplaceIds: [MARKETPLACE_ID],

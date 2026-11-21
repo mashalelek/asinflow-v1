@@ -15,9 +15,8 @@
 // upsert, and ONE Refresh job scoped to all of them is enqueued at the end.
 // Per-chunk results go in the outcomes under `_chunk …` keys; a failed chunk
 // fails the component with the chunks so far recorded (ComponentError).
-import { syncSalesData, buildDateChunks, MAX_RANGE_DAYS, SalesSyncError, type SalesSyncResult, type SalesSyncOptions } from "../../sales-sync";
+import { syncSalesData, buildDateChunks, MAX_RANGE_DAYS, SalesSyncError, pacificDay, type SalesSyncResult, type SalesSyncOptions } from "../../sales-sync";
 import { enqueueOnboardingJob } from "../jobs-repo";
-import { ymdLocal } from "./shared";
 import { ComponentError, type ComponentDef, type ComponentContext, type ComponentResult } from "../types";
 
 /** Trailing re-read (Finances patch §3, 2026-11-20): 30 days, so an order Amazon cancels weeks after purchase drops out of its day; was 48 h. */
@@ -41,8 +40,11 @@ export function salesWindowFor(params: Record<string, any> | null | undefined, n
   if (w && typeof w === "object" && YMD.test(String(w.from)) && YMD.test(String(w.to)) && String(w.from) <= String(w.to)) {
     return { start: String(w.from), end: String(w.to), source: "params" };
   }
+  // Pacific days (the report's day basis), not the host's: on Render (Eastern) the 00:00 ET pass reaches this step
+  // after midnight Eastern while the Pacific day is still yesterday — a chunk for "today" then starts in the future
+  // and Amazon answers 400 (job 794, 2026-11-21 06:52 UTC).
   const start = new Date(now.getTime() - SALES_WINDOW_HOURS * 3600 * 1000);
-  return { start: ymdLocal(start), end: ymdLocal(now), source: "default" };
+  return { start: pacificDay(start.toISOString()), end: pacificDay(now.toISOString()), source: "default" };
 }
 
 /** The ledger shape for a (possibly partial) sync result. */
